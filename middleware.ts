@@ -47,35 +47,12 @@ export async function middleware(request: NextRequest) {
 
   // Root redirects to dashboard
   if (path === '/') {
-    if (user) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
-    } else {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
+    return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
-  // Auth pages logic
+  // Auth pages logic (redirect to dashboard since we run in private workspace mode)
   if (path === '/login' || path === '/signup') {
-    if (user) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
-    }
-    return response;
-  }
-
-  // Protected pages logic
-  const isProtectedRoute = path.startsWith('/dashboard') || path.startsWith('/org') || path.startsWith('/api/org') || path.startsWith('/api/records') || path.startsWith('/api/card-design');
-  
-  // Public exception for single card PDF/PNG or export-all if we need public links, but actually let's keep export endpoints authenticated or unauthenticated.
-  // Wait, let's keep all /api routes except public endpoints secured.
-  if (isProtectedRoute && !user) {
-    // For API routes, return 401 instead of redirecting
-    if (path.startsWith('/api/')) {
-      return new NextResponse(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return NextResponse.redirect(new URL('/login', request.url));
+    return NextResponse.redirect(new URL('/dashboard', request.url));
   }
 
   return response;

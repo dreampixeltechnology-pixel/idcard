@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import React, { useState, useEffect, useRef, use, useCallback } from 'react';
@@ -7,7 +8,7 @@ import { getSupabaseClient } from '@/lib/supabase-client';
 import ImageEditor from '@/components/image-editor';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
 
 import { 
   ArrowLeft, 
@@ -27,7 +28,8 @@ import {
   X, 
   CheckCircle2, 
   AlertTriangle,
-  UserCheck
+  UserCheck,
+  Link2
 } from 'lucide-react';
 
 interface Department {
@@ -91,6 +93,45 @@ export default function DeptDetailPage({ params }: PageProps) {
   // Photo upload trigger for bulk rows
   const [bulkUploadedRecords, setBulkUploadedRecords] = useState<RecordRow[]>([]);
   const [excelSuccessMsg, setExcelSuccessMsg] = useState<string | null>(null);
+
+  // Edit Department States
+  const [isEditDeptModalOpen, setIsEditDeptModalOpen] = useState(false);
+  const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
+  const [formulaCopied, setFormulaCopied] = useState(false);
+  const [editDeptName, setEditDeptName] = useState('');
+  const [editExpectedCount, setEditExpectedCount] = useState<number>(0);
+  const [updatingDept, setUpdatingDept] = useState(false);
+  const [editDeptError, setEditDeptError] = useState<string | null>(null);
+
+  const handleUpdateDept = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editDeptName.trim() || editExpectedCount <= 0) {
+      setEditDeptError('Please provide a valid name and an expected count greater than 0.');
+      return;
+    }
+    setUpdatingDept(true);
+    setEditDeptError(null);
+    try {
+      const { error } = await supabase!
+        .from('departments')
+        .update({
+          name: editDeptName.trim(),
+          expected_count: editExpectedCount
+        })
+        .eq('id', deptId);
+
+      if (error) {
+        setEditDeptError(error.message);
+      } else {
+        setDept(prev => prev ? { ...prev, name: editDeptName.trim(), expected_count: editExpectedCount } : null);
+        setIsEditDeptModalOpen(false);
+      }
+    } catch (err: any) {
+      setEditDeptError(err?.message || 'Failed to update department details.');
+    } finally {
+      setUpdatingDept(false);
+    }
+  };
 
   const router = useRouter();
   const supabase = getSupabaseClient();
@@ -392,6 +433,38 @@ export default function DeptDetailPage({ params }: PageProps) {
     }
   };
 
+  // Export active records directly to Excel
+  const handleExportExcelOnly = () => {
+    if (!dept || !organization) return;
+    
+    // Build headers
+    const headers = ['Serial Number', ...fieldsSchema.map(f => f.name), 'Photo Status', 'Photo URL', 'Created At'];
+    
+    // Build rows
+    const tableRows = records.map((r) => {
+      const rowData: Record<string, any> = {
+        'Serial Number': r.serial_number
+      };
+      
+      fieldsSchema.forEach((f) => {
+        rowData[f.name] = r.data[f.name] || '';
+      });
+      
+      rowData['Photo Status'] = r.photo_uploaded ? 'Uploaded' : 'Missing';
+      rowData['Photo URL'] = r.photo_url || 'N/A';
+      rowData['Created At'] = new Date(r.created_at).toLocaleDateString();
+      
+      return rowData;
+    });
+    
+    // Generate spreadsheet using xlsx
+    const ws = XLSX.utils.json_to_sheet(tableRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Roster Records');
+    
+    XLSX.writeFile(wb, `${organization.code}-${dept.code}-roster.xlsx`);
+  };
+
   // jsPDF - Generate PDF of Records with highlighted gaps
   const handleDownloadPdf = () => {
     if (!dept || !organization) return;
@@ -422,7 +495,7 @@ export default function DeptDetailPage({ params }: PageProps) {
       }
     }
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 32,
       head: [headers],
       body: tableRows,
@@ -473,6 +546,19 @@ export default function DeptDetailPage({ params }: PageProps) {
                   <span className="font-display font-semibold text-slate-500 text-sm">{organization.name}</span>
                   <ChevronRight className="h-4 w-4 text-slate-300" />
                   <span className="font-display text-base font-bold text-slate-900">{dept.name}</span>
+                  <button
+                    onClick={() => {
+                      setEditDeptName(dept.name);
+                      setEditExpectedCount(dept.expected_count);
+                      setEditDeptError(null);
+                      setIsEditDeptModalOpen(true);
+                    }}
+                    className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                    title="Edit Department Details"
+                    id="edit-dept-btn"
+                  >
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -522,6 +608,24 @@ export default function DeptDetailPage({ params }: PageProps) {
             >
               <Upload className="h-4 w-4 text-emerald-600" />
               <span>Bulk Spreadsheet Upload</span>
+            </button>
+
+            <button
+              id="excel-export-btn"
+              onClick={handleExportExcelOnly}
+              className="flex items-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors"
+            >
+              <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+              <span>Excel Export</span>
+            </button>
+
+            <button
+              id="google-sheets-sync-btn"
+              onClick={() => setIsSheetsModalOpen(true)}
+              className="flex items-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors"
+            >
+              <Link2 className="h-4 w-4 text-teal-600" />
+              <span>Google Sheets Sync</span>
             </button>
 
             <button
@@ -1074,6 +1178,161 @@ export default function DeptDetailPage({ params }: PageProps) {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Department Modal */}
+      {isEditDeptModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in" id="edit-dept-modal">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up">
+            <h3 className="font-display text-xl font-bold text-slate-900 mb-1" id="edit-dept-modal-title">
+              Edit Department Details
+            </h3>
+            <p className="text-sm text-slate-500 mb-6">
+              Update the name and allocated size (expected count) of this department.
+            </p>
+
+            {editDeptError && (
+              <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600 border border-red-100 mb-4 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{editDeptError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateDept} className="space-y-4" id="edit-dept-form">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Department Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Engineering Staff"
+                  value={editDeptName}
+                  onChange={(e) => setEditDeptName(e.target.value)}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Expected Count (Allocated Size)
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  placeholder="e.g. 150"
+                  value={editExpectedCount || ''}
+                  onChange={(e) => setEditExpectedCount(parseInt(e.target.value) || 0)}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Updating this changes the participant matrix slots. Gaps will highlight automatically.
+                </p>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditDeptModalOpen(false)}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingDept}
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100"
+                >
+                  {updatingDept ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    'Save Changes'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Google Sheets Sync Modal */}
+      {isSheetsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in" id="google-sheets-modal">
+          <div className="w-full max-w-xl bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up">
+            <button
+              onClick={() => setIsSheetsModalOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <h3 className="font-display text-xl font-bold text-slate-900 mb-1" id="sheets-modal-title">
+              Connected Google Sheets Live Sync
+            </h3>
+            <p className="text-sm text-slate-500 mb-6">
+              Connect this department roster directly to Google Sheets using a dynamic, real-time CSV data feed.
+            </p>
+
+            <div className="space-y-4">
+              <div className="bg-indigo-50 border border-indigo-100/50 rounded-2xl p-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-700 mb-1.5 flex items-center gap-1">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700">1</span>
+                  Copy the Sync Formula
+                </h4>
+                <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+                  Open any Google Spreadsheet and paste this live import formula into cell <strong>A1</strong>. Google Sheets will fetch and automatically update your participant list in real-time.
+                </p>
+                <div className="flex gap-2 items-center">
+                  <div className="flex-1 font-mono text-[11px] bg-slate-900 text-slate-200 p-3 rounded-xl border border-slate-800 overflow-x-auto select-all whitespace-nowrap">
+                    {`=IMPORTDATA("${typeof window !== 'undefined' ? window.location.origin : ''}/api/cards/feed/${deptId}")`}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+                      navigator.clipboard.writeText(`=IMPORTDATA("${origin}/api/cards/feed/${deptId}")`);
+                      setFormulaCopied(true);
+                      setTimeout(() => setFormulaCopied(false), 2000);
+                    }}
+                    className="shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-3 text-xs font-semibold shadow-md shadow-indigo-100 transition-colors cursor-pointer"
+                  >
+                    {formulaCopied ? 'Copied!' : 'Copy Formula'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="border border-slate-200/60 rounded-2xl p-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5 flex items-center gap-1">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-600">2</span>
+                  How it updates
+                </h4>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Google Sheets updates `=IMPORTDATA` formulas periodically (typically every hour or when the spreadsheet is opened). Any additions, photo status updates, or changes made in this Record Console will automatically stream into your sheet.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex gap-3 items-start">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800">Direct Live Feed Link</h4>
+                  <p className="text-xs text-slate-400 mt-1">
+                    You can also access the raw CSV directly at: <a href={`/api/cards/feed/${deptId}`} target="_blank" className="text-indigo-600 underline font-mono text-[10px] break-all">{`${typeof window !== 'undefined' ? window.location.origin : ''}/api/cards/feed/${deptId}`}</a>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsSheetsModalOpen(false)}
+                className="rounded-xl px-5 py-2.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

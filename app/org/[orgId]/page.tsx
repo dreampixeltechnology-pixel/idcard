@@ -17,7 +17,8 @@ import {
   Hash,
   Image as ImageIcon,
   ChevronRight,
-  Info
+  Info,
+  Edit3
 } from 'lucide-react';
 
 interface Department {
@@ -56,6 +57,38 @@ export default function OrgDetailPage({ params }: PageProps) {
   ]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Edit Organization States
+  const [isEditOrgModalOpen, setIsEditOrgModalOpen] = useState(false);
+  const [editOrgName, setEditOrgName] = useState('');
+  const [updatingOrg, setUpdatingOrg] = useState(false);
+
+  const handleUpdateOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editOrgName.trim()) {
+      setFormError('Organization name cannot be empty.');
+      return;
+    }
+    setUpdatingOrg(true);
+    setFormError(null);
+    try {
+      const { error } = await supabase!
+        .from('organizations')
+        .update({ name: editOrgName.trim() })
+        .eq('id', orgId);
+
+      if (error) {
+        setFormError(error.message);
+      } else {
+        setOrganization(prev => prev ? { ...prev, name: editOrgName.trim() } : null);
+        setIsEditOrgModalOpen(false);
+      }
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to update organization name.');
+    } finally {
+      setUpdatingOrg(false);
+    }
+  };
 
   const router = useRouter();
   const supabase = getSupabaseClient();
@@ -226,6 +259,17 @@ export default function OrgDetailPage({ params }: PageProps) {
                   <span className="font-display font-semibold text-slate-500 text-sm">Organizations</span>
                   <ChevronRight className="h-4 w-4 text-slate-300" />
                   <span className="font-display text-base font-bold text-slate-900">{organization.name}</span>
+                  <button
+                    onClick={() => {
+                      setEditOrgName(organization.name);
+                      setIsEditOrgModalOpen(true);
+                    }}
+                    className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                    title="Edit Organization Name"
+                    id="edit-org-btn"
+                  >
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -480,6 +524,64 @@ export default function OrgDetailPage({ params }: PageProps) {
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     'Configure'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Organization Name Modal */}
+      {isEditOrgModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in" id="edit-org-modal">
+          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up">
+            <h3 className="font-display text-xl font-bold text-slate-900 mb-1" id="edit-org-modal-title">
+              Edit Organization Details
+            </h3>
+            <p className="text-sm text-slate-500 mb-6">
+              Update your organization name here.
+            </p>
+
+            {formError && (
+              <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600 border border-red-100 mb-4 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{formError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateOrg} className="space-y-4" id="edit-org-form">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Organization Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Silicon Valley Minerals"
+                  value={editOrgName}
+                  onChange={(e) => setEditOrgName(e.target.value)}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                />
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsEditOrgModalOpen(false)}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingOrg}
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100"
+                >
+                  {updatingOrg ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    'Save Changes'
                   )}
                 </button>
               </div>

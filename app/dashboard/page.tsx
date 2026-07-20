@@ -171,18 +171,14 @@ export default function DashboardPage() {
                   <User className="h-4 w-4" />
                 </div>
                 <span className="hidden font-medium sm:inline">
-                  {user?.user_metadata?.full_name || user?.email}
+                  Shop Owner (Private)
                 </span>
               </div>
 
-              <button
-                id="logout-btn"
-                onClick={handleLogout}
-                className="flex items-center space-x-1 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
-              >
-                <LogOut className="h-4 w-4" />
-                <span className="hidden sm:inline">Logout</span>
-              </button>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 font-mono border border-emerald-100">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                Shop Active
+              </span>
             </div>
           </div>
         </div>

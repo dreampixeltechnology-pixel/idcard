@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import { Inter, Space_Grotesk, JetBrains_Mono } from 'next/font/google';
+import { AuthProvider } from '@/components/auth-provider';
 import './globals.css'; // Global styles
 
 const inter = Inter({
@@ -26,7 +27,9 @@ export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en" className={`${inter.variable} ${spaceGrotesk.variable} ${jetbrainsMono.variable}`}>
       <body className="bg-slate-50 text-slate-900 font-sans antialiased min-h-screen" suppressHydrationWarning>
-        {children}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
