@@ -11,13 +11,16 @@ import {
   Calendar, 
   ArrowRight, 
   Loader2, 
-  AlertCircle 
+  AlertCircle,
+  MessageCircle
 } from 'lucide-react';
 
 interface Organization {
   id: string;
   name: string;
   code: string;
+  address?: string;
+  contact_phone?: string;
   created_at: string;
 }
 
@@ -30,6 +33,8 @@ export default function DashboardPage() {
   // New Org Form State
   const [orgName, setOrgName] = useState('');
   const [orgCode, setOrgCode] = useState('');
+  const [orgAddress, setOrgAddress] = useState('');
+  const [orgContactPhone, setOrgContactPhone] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -100,16 +105,40 @@ export default function DashboardPage() {
     setSubmitting(true);
 
     try {
-      const { data, error } = await supabase!
+      let insertPayload: any = {
+        name: orgName,
+        code: orgCode.toUpperCase(),
+        user_id: user.id,
+        address: orgAddress.trim() || null,
+        contact_phone: orgContactPhone.trim() || null
+      };
+
+      let { data, error } = await supabase!
         .from('organizations')
-        .insert([
-          {
-            name: orgName,
-            code: orgCode.toUpperCase(),
-            user_id: user.id
-          }
-        ])
+        .insert([insertPayload])
         .select();
+
+      // Fallback in case columns do not exist yet in their Supabase database schema
+      if (error && (error.message?.includes('column') || error.code === 'P0002' || error.message?.includes('not found'))) {
+        console.warn('New columns address/contact_phone might not exist yet, falling back...', error);
+        // Retry without new columns
+        const fallbackPayload = {
+          name: orgName,
+          code: orgCode.toUpperCase(),
+          user_id: user.id
+        };
+        const fallbackResult = await supabase!
+          .from('organizations')
+          .insert([fallbackPayload])
+          .select();
+        
+        data = fallbackResult.data;
+        error = fallbackResult.error;
+
+        if (!error) {
+          alert('Organization created! Note: Address and Contact details were skipped because the Supabase database schema has not been updated. Please execute the updated supabase_migration.sql in your Supabase SQL Editor.');
+        }
+      }
 
       if (error) {
         if (error.code === '23505') {
@@ -124,6 +153,8 @@ export default function DashboardPage() {
         setIsModalOpen(false);
         setOrgName('');
         setOrgCode('');
+        setOrgAddress('');
+        setOrgContactPhone('');
       }
     } catch (err: any) {
       setFormError(err?.message || 'An error occurred during submission.');
@@ -260,6 +291,38 @@ export default function DashboardPage() {
                   <h3 className="font-display text-xl font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
                     {org.name}
                   </h3>
+
+                  {/* Address & Contact Info with WhatsApp reminder */}
+                  {(org.address || org.contact_phone) && (
+                    <div className="mt-3 space-y-1.5 text-xs text-slate-500 border-t border-slate-100 pt-3" onClick={(e) => e.stopPropagation()}>
+                      {org.address && (
+                        <div className="flex items-start gap-1.5">
+                          <span className="font-semibold text-slate-600">Address:</span>
+                          <span className="truncate max-w-[180px] text-slate-700" title={org.address}>{org.address}</span>
+                        </div>
+                      )}
+                      {org.contact_phone && (
+                        <div className="flex items-center justify-between gap-1.5 mt-1">
+                          <div className="flex items-center gap-1">
+                            <span className="font-semibold text-slate-600">Contact:</span>
+                            <span className="font-mono text-slate-700">{org.contact_phone}</span>
+                          </div>
+                          
+                          {/* Direct WhatsApp Link */}
+                          <a
+                            href={`https://wa.me/${org.contact_phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Hello! This is a reminder regarding your ID Card Generation service for next year.`)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                            title="Direct WhatsApp Reminder"
+                          >
+                            <MessageCircle className="h-2.5 w-2.5" />
+                            WhatsApp
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-8 flex items-center justify-between pt-4 border-t border-slate-100">
@@ -323,6 +386,35 @@ export default function DashboardPage() {
                 />
                 <p className="text-xs text-slate-400 mt-1">
                   Used for file structures and storage paths. Max alphanumeric.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Address
+                </label>
+                <textarea
+                  placeholder="e.g. 123 Innovation Way, Tech District"
+                  value={orgAddress}
+                  onChange={(e) => setOrgAddress(e.target.value)}
+                  rows={2}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Contact Phone Number (WhatsApp)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 919876543210 (with country code)"
+                  value={orgContactPhone}
+                  onChange={(e) => setOrgContactPhone(e.target.value)}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all font-mono"
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Enter number without spaces or symbols (e.g. 919876543210) for direct WhatsApp message.
                 </p>
               </div>
 

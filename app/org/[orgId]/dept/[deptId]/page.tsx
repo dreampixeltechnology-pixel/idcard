@@ -26,7 +26,8 @@ import {
   CheckCircle2, 
   AlertTriangle,
   UserCheck,
-  Link2
+  Link2,
+  FileArchive
 } from 'lucide-react';
 
 interface Department {
@@ -102,6 +103,16 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [updatingDept, setUpdatingDept] = useState(false);
   const [deletingDept, setDeletingDept] = useState(false);
   const [editDeptError, setEditDeptError] = useState<string | null>(null);
+
+  // ZIP Export States
+  const [isZipExporting, setIsZipExporting] = useState(false);
+
+  // Bulk Edit States
+  const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
+  const [isBulkEditModalOpen, setIsBulkEditModalOpen] = useState(false);
+  const [bulkEditField, setBulkEditField] = useState<string>('');
+  const [bulkEditValue, setBulkEditValue] = useState<string>('');
+  const [bulkEditSubmitting, setBulkEditSubmitting] = useState(false);
 
   const handleAddEditField = () => {
     setEditFields([...editFields, { name: '', type: 'text' }]);
@@ -435,15 +446,49 @@ export default function DeptDetailPage({ params }: PageProps) {
     if (!confirm('Are you sure you want to delete this record? This cannot be undone.')) return;
     setLoading(true);
     try {
-      const { error } = await supabase!
-        .from('records')
-        .delete()
-        .eq('id', id);
+      const response = await fetch('/api/records', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordIds: [id] })
+      });
 
-      if (error) alert(error.message);
-      else await loadPageData();
-    } catch (err) {
+      const result = await response.json();
+      if (result.error) {
+        alert(result.error);
+      } else {
+        await loadPageData();
+      }
+    } catch (err: any) {
       console.error(err);
+      alert(err?.message || 'Failed to delete record.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Bulk Delete selected records
+  const handleBulkDelete = async () => {
+    if (selectedRecordIds.length === 0) return;
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete the ${selectedRecordIds.length} selected records and all of their uploaded images? This action cannot be undone.`);
+    if (!confirmDelete) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/records', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordIds: selectedRecordIds })
+      });
+
+      const result = await response.json();
+      if (result.error) {
+        alert(result.error);
+      } else {
+        setSelectedRecordIds([]);
+        await loadPageData();
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to bulk delete records.');
     } finally {
       setLoading(false);
     }
@@ -511,7 +556,28 @@ export default function DeptDetailPage({ params }: PageProps) {
       const formattedRows = excelRows.map((row) => {
         const rowData: Record<string, any> = {};
         fieldsSchema.forEach((f) => {
-          rowData[f.name] = row[f.name] !== undefined ? String(row[f.name]) : '';
+          let val = row[f.name] !== undefined ? String(row[f.name]) : '';
+          if (f.type === 'date' && val) {
+            const trimmed = val.trim();
+            const dmMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+            if (dmMatch) {
+              const dd = dmMatch[1].padStart(2, '0');
+              const mm = dmMatch[2].padStart(2, '0');
+              const yyyy = dmMatch[3];
+              val = `${yyyy}-${mm}-${dd}`;
+            } else {
+              try {
+                const d = new Date(trimmed);
+                if (!isNaN(d.getTime())) {
+                  const yyyy = d.getFullYear();
+                  const mm = String(d.getMonth() + 1).padStart(2, '0');
+                  const dd = String(d.getDate()).padStart(2, '0');
+                  val = `${yyyy}-${mm}-${dd}`;
+                }
+              } catch (e) {}
+            }
+          }
+          rowData[f.name] = val;
         });
         return rowData;
       });
@@ -557,7 +623,14 @@ export default function DeptDetailPage({ params }: PageProps) {
       };
       
       fieldsSchema.forEach((f) => {
-        rowData[f.name] = r.data[f.name] || '';
+        let val = r.data[f.name] || '';
+        if (f.type === 'date' && val) {
+          const dateMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (dateMatch) {
+            val = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+          }
+        }
+        rowData[f.name] = val;
       });
       
       rowData['Photo Status'] = r.photo_uploaded ? 'Uploaded' : 'Missing';
@@ -649,6 +722,77 @@ export default function DeptDetailPage({ params }: PageProps) {
     });
 
     doc.save(`${organization.code}-${dept.code}-report.pdf`);
+  };
+
+  // Format date string from YYYY-MM-DD to DD-MM-YYYY
+  const formatDateString = (val: string): string => {
+    if (!val) return '';
+    const dateMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateMatch) {
+      return `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    }
+    return val;
+  };
+
+  // Export all cards + Excel metadata as ZIP
+  const handleExportZip = async () => {
+    if (!dept || !organization) return;
+    setIsZipExporting(true);
+    try {
+      const response = await fetch(`/api/cards/export-all/${deptId}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to generate ZIP.');
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${organization.code.toUpperCase()}-${dept.code.toUpperCase()}-all-cards.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || 'Error downloading ZIP archive.');
+    } finally {
+      setIsZipExporting(false);
+    }
+  };
+
+  // Submit bulk edit changes
+  const handleBulkEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkEditField || selectedRecordIds.length === 0) return;
+    
+    setBulkEditSubmitting(true);
+    try {
+      const response = await fetch('/api/records', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recordIds: selectedRecordIds,
+          fieldName: bulkEditField,
+          newValue: bulkEditValue
+        })
+      });
+
+      const result = await response.json();
+      if (result.error) {
+        alert(result.error);
+      } else {
+        setIsBulkEditModalOpen(false);
+        setSelectedRecordIds([]);
+        setBulkEditField('');
+        setBulkEditValue('');
+        await loadPageData();
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to apply bulk edit.');
+    } finally {
+      setBulkEditSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -758,12 +902,17 @@ export default function DeptDetailPage({ params }: PageProps) {
             </button>
 
             <button
-              id="google-sheets-sync-btn"
-              onClick={() => setIsSheetsModalOpen(true)}
-              className="flex items-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors"
+              id="zip-export-btn"
+              onClick={handleExportZip}
+              disabled={isZipExporting}
+              className="flex items-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors disabled:opacity-50"
             >
-              <Link2 className="h-4 w-4 text-teal-600" />
-              <span>Google Sheets Sync</span>
+              {isZipExporting ? (
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+              ) : (
+                <FileArchive className="h-4 w-4 text-indigo-600" />
+              )}
+              <span>Export Cards (ZIP)</span>
             </button>
 
             <button
@@ -832,6 +981,48 @@ export default function DeptDetailPage({ params }: PageProps) {
           </div>
         )}
 
+        {/* Bulk Edit Action Bar */}
+        {selectedRecordIds.length > 0 && (
+          <div className="bg-indigo-50 border border-indigo-150 p-4 rounded-2xl mb-6 flex flex-col sm:flex-row items-center justify-between gap-3 animate-fade-in shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="bg-indigo-600 text-white font-bold text-xs px-2.5 py-1 rounded-full">
+                {selectedRecordIds.length} Selected
+              </span>
+              <p className="text-sm font-semibold text-indigo-900">
+                Bulk action active for school ID cards batch update.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setBulkEditField('');
+                  setBulkEditValue('');
+                  setIsBulkEditModalOpen(true);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm"
+              >
+                Bulk Edit Columns
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors shadow-sm flex items-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Bulk Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedRecordIds([])}
+                className="text-indigo-600 hover:bg-indigo-100 text-xs font-bold px-3 py-2 rounded-xl transition-colors"
+              >
+                Clear Selection
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Matrix Table Preview */}
         <section className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden" id="records-table-container">
           <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
@@ -843,6 +1034,20 @@ export default function DeptDetailPage({ params }: PageProps) {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200/60 font-mono text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th className="px-4 py-3.5 w-10">
+                    <input
+                      type="checkbox"
+                      checked={records.length > 0 && selectedRecordIds.length === records.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedRecordIds(records.map(r => r.id));
+                        } else {
+                          setSelectedRecordIds([]);
+                        }
+                      }}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                    />
+                  </th>
                   <th className="px-6 py-3.5 w-16">Serial</th>
                   {fieldsSchema.map((f, i) => (
                     <th key={i} className="px-4 py-3.5">{f.name}</th>
@@ -860,6 +1065,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                     // Empty row highlight
                     return (
                       <tr key={serialNum} className="bg-red-50/20 hover:bg-red-50/40 transition-colors animate-fade-in" id={`row-empty-${serialNum}`}>
+                        <td className="px-4 py-4 w-10"></td>
                         <td className="px-6 py-4 font-mono font-bold text-red-600">{serialNum}</td>
                         {fieldsSchema.map((_, fIdx) => (
                           <td key={fIdx} className="px-4 py-4 text-red-500 italic font-medium">Not Received</td>
@@ -885,12 +1091,29 @@ export default function DeptDetailPage({ params }: PageProps) {
                   // Record exists
                   return (
                     <tr key={record.id} className="hover:bg-slate-50/60 transition-colors" id={`row-record-${serialNum}`}>
+                      <td className="px-4 py-4 w-10">
+                        <input
+                          type="checkbox"
+                          checked={selectedRecordIds.includes(record.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedRecordIds([...selectedRecordIds, record.id]);
+                            } else {
+                              setSelectedRecordIds(selectedRecordIds.filter(id => id !== record.id));
+                            }
+                          }}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                        />
+                      </td>
                       <td className="px-6 py-4 font-mono font-semibold text-slate-600">{serialNum}</td>
                       
                       {/* Render schema fields */}
                       {fieldsSchema.map((field, fIdx) => {
-                        const val = record.data[field.name];
+                        let val = record.data[field.name];
                         const isMissing = val === undefined || val === null || val === '';
+                        if (!isMissing && field.type === 'date') {
+                          val = formatDateString(val);
+                        }
                         return (
                           <td 
                             key={fIdx} 
@@ -901,10 +1124,10 @@ export default function DeptDetailPage({ params }: PageProps) {
                         );
                       })}
 
-                      {/* Photo Column */}
+                      {/* Photo Column - Size Doubled (h-20 w-20) for 2x clarity */}
                       <td className="px-4 py-4">
                         {record.photo_uploaded && record.photo_url ? (
-                          <div className="relative h-10 w-10 rounded-lg overflow-hidden border border-slate-200">
+                          <div className="relative h-20 w-20 rounded-lg overflow-hidden border border-slate-200 shadow-sm hover:scale-105 transition-transform duration-200 cursor-pointer">
                             <img 
                               src={record.photo_url} 
                               alt="Avatar" 
@@ -1080,7 +1303,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                       </div>
 
                       {singleFormData[field.name] && (
-                        <div className="relative h-20 w-20 rounded-xl border border-slate-200 overflow-hidden">
+                        <div className="relative h-40 w-40 rounded-xl border border-slate-200 overflow-hidden">
                           <img 
                             src={singleFormData[field.name]} 
                             alt="Crop Preview" 
@@ -1123,7 +1346,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                     </div>
 
                     {singleFormData['Photo'] && (
-                      <div className="relative h-20 w-20 rounded-xl border border-slate-200 overflow-hidden">
+                      <div className="relative h-40 w-40 rounded-xl border border-slate-200 overflow-hidden">
                         <img 
                           src={singleFormData['Photo']} 
                           alt="Crop Preview" 
@@ -1158,6 +1381,108 @@ export default function DeptDetailPage({ params }: PageProps) {
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     editingRecord ? 'Update' : 'Add'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Edit Modal */}
+      {isBulkEditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-md p-6 relative">
+            <button
+              onClick={() => setIsBulkEditModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <h3 className="font-display text-xl font-bold text-slate-900 mb-2">
+              Bulk Edit Selected Records
+            </h3>
+            <p className="text-xs text-slate-500 mb-6">
+              You are editing <strong>{selectedRecordIds.length}</strong> records at once. Perfect for fast class, section, or department updates.
+            </p>
+
+            <form onSubmit={handleBulkEditSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Select Column to Update
+                </label>
+                <select
+                  required
+                  value={bulkEditField}
+                  onChange={(e) => {
+                    setBulkEditField(e.target.value);
+                    setBulkEditValue('');
+                  }}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 bg-white sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="">-- Choose Field --</option>
+                  {fieldsSchema.map((field) => (
+                    <option key={field.name} value={field.name}>
+                      {field.name} ({field.type})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {bulkEditField && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                    Enter New Value
+                  </label>
+                  {fieldsSchema.find(f => f.name === bulkEditField)?.type === 'date' ? (
+                    <input
+                      type="date"
+                      required
+                      value={bulkEditValue}
+                      onChange={(e) => setBulkEditValue(e.target.value)}
+                      className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  ) : fieldsSchema.find(f => f.name === bulkEditField)?.type === 'number' ? (
+                    <input
+                      type="number"
+                      required
+                      value={bulkEditValue}
+                      onChange={(e) => setBulkEditValue(e.target.value)}
+                      className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      required
+                      value={bulkEditValue}
+                      onChange={(e) => setBulkEditValue(e.target.value)}
+                      placeholder="Enter the new common value"
+                      className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkEditModalOpen(false)}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={bulkEditSubmitting || !bulkEditField}
+                  className="rounded-xl px-4 py-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-sm disabled:opacity-50 flex items-center gap-2"
+                >
+                  {bulkEditSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" /> Saving...
+                    </>
+                  ) : (
+                    'Apply Update'
                   )}
                 </button>
               </div>

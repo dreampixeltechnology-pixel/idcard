@@ -65,63 +65,58 @@ export default function ImageEditor({ imageSrc, onClose, onSave }: ImageEditorPr
     }
   };
 
-  // Run AI background removal
+  // Run local canvas-based background removal (instant, offline, non-AI)
   const handleRemoveBackground = async () => {
     if (!croppedBlob) return;
     setProcessing(true);
     try {
-      // Lazy load to prevent bundling issue on startup
-      const { removeBackground } = await import('@imgly/background-removal');
-      
-      const removedBlob = await removeBackground(croppedBlob, {
-        progress: (key, current, total) => {
-          console.log(`AI Removing background ${key}: ${current}/${total}`);
-        }
-      });
-      
-      const url = URL.createObjectURL(removedBlob);
-      setBgRemovedBlob(removedBlob);
+      const localBlob = await runLocalChromaKey(croppedBlob);
+      const url = URL.createObjectURL(localBlob);
+      setBgRemovedBlob(localBlob);
       setBgRemovedUrl(url);
       setActiveUrl(url);
       setIsBackgroundRemoved(true);
-      setBgColor('transparent'); // Default transparent once background removed
+      setBgColor('transparent');
     } catch (err) {
-      console.error('AI BG removal failed, falling back to local canvas keyer:', err);
-      // Fallback: Chroma-key style background subtraction (removes whitish/light grey backgrounds)
-      try {
-        const localBlob = await runLocalChromaKey(croppedBlob);
-        const url = URL.createObjectURL(localBlob);
-        setBgRemovedBlob(localBlob);
-        setBgRemovedUrl(url);
-        setActiveUrl(url);
-        setIsBackgroundRemoved(true);
-        setBgColor('transparent');
-      } catch (fallbackErr) {
-        alert('Could not remove background automatically. Proceeding with standard cropped image.');
-      }
+      console.error('Background removal failed:', err);
+      alert('Could not isolate background automatically.');
     } finally {
       setProcessing(false);
     }
   };
 
-  // Local fallback background removal (White / Light background removal using Canvas)
+  // Local background removal (White / Light background removal using Canvas)
   const runLocalChromaKey = (blob: Blob): Promise<Blob> => {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        // Keep dimensions optimized under 1200px for clarity and low file size
+        let targetWidth = img.width;
+        let targetHeight = img.height;
+        const MAX_DIMENSION = 1200;
+        if (targetWidth > MAX_DIMENSION) {
+          const ratio = MAX_DIMENSION / targetWidth;
+          targetWidth = MAX_DIMENSION;
+          targetHeight = Math.round(img.height * ratio);
+        }
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
           reject(new Error('Canvas context error'));
           return;
         }
-        ctx.drawImage(img, 0, 0);
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imgData.data;
 
-        // Thresholding: Detect light colors (R,G,B > 220) and make them transparent
+        // Thresholding: Detect light colors (R,G,B > 200) and make them transparent
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i];
           const g = data[i + 1];
@@ -159,17 +154,28 @@ export default function ImageEditor({ imageSrc, onClose, onSave }: ImageEditorPr
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        let targetWidth = img.width;
+        let targetHeight = img.height;
+        const MAX_DIMENSION = 1200;
+        if (targetWidth > MAX_DIMENSION) {
+          const ratio = MAX_DIMENSION / targetWidth;
+          targetWidth = MAX_DIMENSION;
+          targetHeight = Math.round(img.height * ratio);
+        }
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           ctx.fillStyle = color;
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
+          ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
         }
         canvas.toBlob((blob) => {
           resolve(blob || imageToUse);
-        }, 'image/jpeg', 0.95);
+        }, 'image/jpeg', 0.85); // High quality (85%) but compressed under 1MB
       };
       img.src = URL.createObjectURL(imageToUse);
     });
@@ -256,8 +262,8 @@ export default function ImageEditor({ imageSrc, onClose, onSave }: ImageEditorPr
                   <div className="flex items-start gap-2.5">
                     <Sparkles className="h-5 w-5 text-indigo-600 shrink-0 mt-0.5" />
                     <div>
-                      <span className="text-sm font-semibold text-slate-800 block">AI Background Isolation</span>
-                      <span className="text-xs text-slate-500 block">Isolate the subject from complex backdrops.</span>
+                      <span className="text-sm font-semibold text-slate-800 block">Background Color Eraser</span>
+                      <span className="text-xs text-slate-500 block">Isolate the subject by erasing light/white backgrounds.</span>
                     </div>
                   </div>
                   <button

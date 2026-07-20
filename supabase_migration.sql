@@ -141,3 +141,8 @@ CREATE POLICY "Users can CRUD card designs of their departments"
 -- Make sure to create a public storage bucket named "org-images" in your Supabase Dashboard under Storage.
 -- Set up Storage Policies for "org-images" bucket:
 -- Allow authenticated users to upload, update, and delete images in "org-images" bucket.
+
+
+-- 8. Organization Address and Contact details for renewal reminders
+ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS contact_phone TEXT;

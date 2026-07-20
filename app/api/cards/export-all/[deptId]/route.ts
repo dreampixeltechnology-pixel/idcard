@@ -76,7 +76,14 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       // Inject schema fields
       const fields = dept.fields_schema as Array<{ name: string; type: string }>;
       fields.forEach((f) => {
-        rowData[f.name] = r.data[f.name] || '';
+        let val = r.data[f.name] || '';
+        if (f.type === 'date' && val) {
+          const dateMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (dateMatch) {
+            val = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+          }
+        }
+        rowData[f.name] = val;
       });
 
       rowData['Photo URL'] = r.photo_url || 'N/A';

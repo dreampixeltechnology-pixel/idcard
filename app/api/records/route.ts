@@ -244,3 +244,136 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: err?.message || 'Server error.' }, { status: 500 });
   }
 }
+
+// PATCH: Bulk update field value for multiple records
+export async function PATCH(req: NextRequest) {
+  try {
+    const { recordIds, fieldName, newValue } = await req.json();
+
+    if (!recordIds || !Array.isArray(recordIds) || recordIds.length === 0 || !fieldName) {
+      return NextResponse.json({ error: 'recordIds (array) and fieldName are required.' }, { status: 400 });
+    }
+
+    const supabaseAdmin = getSupabaseAdmin();
+
+    // 1. Fetch current records to update their JSON data
+    const { data: existingRecords, error: fetchError } = await supabaseAdmin
+      .from('records')
+      .select('id, data')
+      .in('id', recordIds);
+
+    if (fetchError || !existingRecords) {
+      return NextResponse.json({ error: fetchError?.message || 'Failed to fetch existing records.' }, { status: 500 });
+    }
+
+    // 2. Perform updates concurrently
+    const updatePromises = existingRecords.map(async (rec) => {
+      const updatedData = {
+        ...rec.data,
+        [fieldName]: newValue
+      };
+
+      return supabaseAdmin
+        .from('records')
+        .update({ data: updatedData })
+        .eq('id', rec.id);
+    });
+
+    const results = await Promise.all(updatePromises);
+    const failed = results.filter(r => r.error);
+
+    if (failed.length > 0) {
+      console.error('Some bulk updates failed:', failed);
+      return NextResponse.json({ error: 'Some records failed to update.' }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, count: recordIds.length });
+  } catch (err: any) {
+    console.error('Error in bulk update PATCH endpoint:', err);
+    return NextResponse.json({ error: err?.message || 'Server error during bulk edit.' }, { status: 500 });
+  }
+}
+
+// DELETE: Delete multiple (or single) records and their uploaded storage photos
+export async function DELETE(req: NextRequest) {
+  try {
+    const { recordIds } = await req.json();
+
+    if (!recordIds || !Array.isArray(recordIds) || recordIds.length === 0) {
+      return NextResponse.json({ error: 'recordIds (array) is required.' }, { status: 400 });
+    }
+
+    const supabaseAdmin = getSupabaseAdmin();
+
+    // 1. Fetch records to get serial numbers and dept_id
+    const { data: recordsToDelete, error: fetchError } = await supabaseAdmin
+      .from('records')
+      .select('id, serial_number, dept_id, photo_uploaded')
+      .in('id', recordIds);
+
+    if (fetchError || !recordsToDelete) {
+      return NextResponse.json({ error: fetchError?.message || 'Failed to fetch records.' }, { status: 500 });
+    }
+
+    // 2. Identify the storage paths for records that have uploaded photos
+    if (recordsToDelete.length > 0) {
+      // Group by department to query the dept and org codes efficiently
+      const deptIds = Array.from(new Set(recordsToDelete.map((r) => r.dept_id)));
+      
+      for (const deptId of deptIds) {
+        // Fetch department and organization codes
+        const { data: deptInfo } = await supabaseAdmin
+          .from('departments')
+          .select('code, org_id')
+          .eq('id', deptId)
+          .single();
+
+        if (deptInfo) {
+          const { data: orgInfo } = await supabaseAdmin
+            .from('organizations')
+            .select('code')
+            .eq('id', deptInfo.org_id)
+            .single();
+
+          if (orgInfo) {
+            const orgCode = orgInfo.code.toUpperCase();
+            const deptCode = deptInfo.code.toUpperCase();
+
+            // Find all serial numbers in this department being deleted
+            const deptSerials = recordsToDelete
+              .filter((r) => r.dept_id === deptId && r.photo_uploaded)
+              .map((r) => r.serial_number);
+
+            if (deptSerials.length > 0) {
+              const filePaths = deptSerials.map((serial) => `${orgCode}/${deptCode}/${serial}.jpg`);
+              
+              const { error: removeError } = await supabaseAdmin.storage
+                .from('org-images')
+                .remove(filePaths);
+
+              if (removeError) {
+                console.error(`Failed to remove files for department ${deptCode}:`, removeError);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Delete records from the database
+    const { error: deleteError } = await supabaseAdmin
+      .from('records')
+      .delete()
+      .in('id', recordIds);
+
+    if (deleteError) {
+      return NextResponse.json({ error: deleteError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, count: recordIds.length });
+  } catch (err: any) {
+    console.error('Error in records DELETE endpoint:', err);
+    return NextResponse.json({ error: err?.message || 'Server error during deletion.' }, { status: 500 });
+  }
+}
+

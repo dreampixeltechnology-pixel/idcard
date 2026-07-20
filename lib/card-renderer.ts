@@ -104,6 +104,11 @@ export async function generateCardPng(
         // Photo is handled below
       } else {
         textValue = record.data[field.field] || '';
+        // Auto-format dates from YYYY-MM-DD to DD-MM-YYYY
+        const dateMatch = textValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (dateMatch) {
+          textValue = `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+        }
       }
 
       if (field.type === 'image') {

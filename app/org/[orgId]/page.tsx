@@ -19,7 +19,8 @@ import {
   ChevronRight,
   Info,
   Edit3,
-  Copy
+  Copy,
+  MessageCircle
 } from 'lucide-react';
 
 interface Department {
@@ -35,6 +36,8 @@ interface Organization {
   id: string;
   name: string;
   code: string;
+  address?: string;
+  contact_phone?: string;
 }
 
 interface PageProps {
@@ -62,6 +65,8 @@ export default function OrgDetailPage({ params }: PageProps) {
   // Edit Organization States
   const [isEditOrgModalOpen, setIsEditOrgModalOpen] = useState(false);
   const [editOrgName, setEditOrgName] = useState('');
+  const [editOrgAddress, setEditOrgAddress] = useState('');
+  const [editOrgContactPhone, setEditOrgContactPhone] = useState('');
   const [updatingOrg, setUpdatingOrg] = useState(false);
   const [deletingOrg, setDeletingOrg] = useState(false);
 
@@ -74,15 +79,46 @@ export default function OrgDetailPage({ params }: PageProps) {
     setUpdatingOrg(true);
     setFormError(null);
     try {
-      const { error } = await supabase!
+      let updatePayload: any = {
+        name: editOrgName.trim(),
+        address: editOrgAddress.trim() || null,
+        contact_phone: editOrgContactPhone.trim() || null
+      };
+
+      let { error } = await supabase!
         .from('organizations')
-        .update({ name: editOrgName.trim() })
+        .update(updatePayload)
         .eq('id', orgId);
+
+      // Fallback in case columns do not exist yet in their Supabase database schema
+      if (error && (error.message?.includes('column') || error.code === 'P0002' || error.message?.includes('not found'))) {
+        console.warn('New columns address/contact_phone might not exist yet, falling back...', error);
+        // Retry with name only
+        const fallbackPayload = { name: editOrgName.trim() };
+        const fallbackResult = await supabase!
+          .from('organizations')
+          .update(fallbackPayload)
+          .eq('id', orgId);
+
+        error = fallbackResult.error;
+
+        if (!error) {
+          setOrganization(prev => prev ? { ...prev, name: editOrgName.trim() } : null);
+          setIsEditOrgModalOpen(false);
+          alert('Organization updated! Note: Address and Contact details were skipped because the Supabase database schema has not been updated. Please execute the updated supabase_migration.sql in your Supabase SQL Editor.');
+          return;
+        }
+      }
 
       if (error) {
         setFormError(error.message);
       } else {
-        setOrganization(prev => prev ? { ...prev, name: editOrgName.trim() } : null);
+        setOrganization(prev => prev ? { 
+          ...prev, 
+          name: editOrgName.trim(), 
+          address: editOrgAddress.trim() || undefined, 
+          contact_phone: editOrgContactPhone.trim() || undefined 
+        } : null);
         setIsEditOrgModalOpen(false);
       }
     } catch (err: any) {
@@ -93,19 +129,19 @@ export default function OrgDetailPage({ params }: PageProps) {
   };
 
   const handleDeleteOrg = async () => {
-    const confirmDelete = window.confirm(`Are you sure you want to permanently delete organization "${organization?.name}"? This will delete all its departments and records. This action cannot be undone.`);
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete organization "${organization?.name}"? This will delete all its departments and records, along with all uploaded images. This action cannot be undone.`);
     if (!confirmDelete) return;
 
     setDeletingOrg(true);
     setFormError(null);
     try {
-      const { error } = await supabase!
-        .from('organizations')
-        .delete()
-        .eq('id', orgId);
+      const res = await fetch(`/api/org/${orgId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
 
-      if (error) {
-        setFormError(error.message);
+      if (!res.ok || data.error) {
+        setFormError(data.error || 'Failed to delete organization.');
       } else {
         setIsEditOrgModalOpen(false);
         router.push('/dashboard');
@@ -118,17 +154,17 @@ export default function OrgDetailPage({ params }: PageProps) {
   };
 
   const handleDeleteDept = async (deptId: string, deptName: string) => {
-    const confirmDelete = window.confirm(`Are you sure you want to permanently delete department "${deptName}" and all of its records? This action cannot be undone.`);
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete department "${deptName}" and all of its records, along with all uploaded images? This action cannot be undone.`);
     if (!confirmDelete) return;
 
     try {
-      const { error } = await supabase!
-        .from('departments')
-        .delete()
-        .eq('id', deptId);
+      const res = await fetch(`/api/org/${orgId}/dept/${deptId}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
 
-      if (error) {
-        alert(`Error deleting department: ${error.message}`);
+      if (!res.ok || data.error) {
+        alert(`Error deleting department: ${data.error || 'Failed to delete department.'}`);
       } else {
         setDepartments(prev => prev.filter(d => d.id !== deptId));
       }
@@ -318,10 +354,12 @@ export default function OrgDetailPage({ params }: PageProps) {
                   <button
                     onClick={() => {
                       setEditOrgName(organization.name);
+                      setEditOrgAddress(organization.address || '');
+                      setEditOrgContactPhone(organization.contact_phone || '');
                       setIsEditOrgModalOpen(true);
                     }}
                     className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                    title="Edit Organization Name"
+                    title="Edit Organization Details"
                     id="edit-org-btn"
                   >
                     <Edit3 className="h-3.5 w-3.5" />
@@ -339,6 +377,38 @@ export default function OrgDetailPage({ params }: PageProps) {
 
       {/* Main Body */}
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Organization Info Banner */}
+        {(organization.address || organization.contact_phone) && (
+          <div className="bg-white border border-slate-200/60 rounded-2xl p-5 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in shadow-sm">
+            <div className="flex flex-col md:flex-row gap-4 md:gap-10">
+              {organization.address && (
+                <div className="space-y-1">
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Office Address</span>
+                  <span className="text-sm font-semibold text-slate-700">{organization.address}</span>
+                </div>
+              )}
+              {organization.contact_phone && (
+                <div className="space-y-1">
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contact Phone</span>
+                  <span className="text-sm font-mono font-semibold text-slate-700">{organization.contact_phone}</span>
+                </div>
+              )}
+            </div>
+
+            {organization.contact_phone && (
+              <a
+                href={`https://wa.me/${organization.contact_phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Hello! This is a friendly reminder regarding your ID Card Generation service for next year.`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 transition-colors shadow-md shadow-emerald-100 cursor-pointer border border-emerald-500"
+              >
+                <MessageCircle className="h-4 w-4" />
+                <span>Message Client (WhatsApp)</span>
+              </a>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
           <div>
             <h1 className="font-display text-3xl font-bold tracking-tight text-slate-900" id="departments-title">
@@ -643,6 +713,35 @@ export default function OrgDetailPage({ params }: PageProps) {
                   onChange={(e) => setEditOrgName(e.target.value)}
                   className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Organization Address
+                </label>
+                <textarea
+                  placeholder="e.g. 123 Innovation Way, Tech District"
+                  value={editOrgAddress}
+                  onChange={(e) => setEditOrgAddress(e.target.value)}
+                  rows={2}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Contact Phone Number (WhatsApp)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 919876543210 (with country code)"
+                  value={editOrgContactPhone}
+                  onChange={(e) => setEditOrgContactPhone(e.target.value)}
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all font-mono"
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Enter digits only (e.g. 919876543210) for direct WhatsApp message reminder functionality.
+                </p>
               </div>
 
               <div className="mt-6 flex justify-between gap-3 pt-4 border-t border-slate-100">
