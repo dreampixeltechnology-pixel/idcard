@@ -146,3 +146,6 @@ CREATE POLICY "Users can CRUD card designs of their departments"
 -- 8. Organization Address and Contact details for renewal reminders
 ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS address TEXT;
 ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS logo_url TEXT;
+ALTER TABLE public.organizations ADD COLUMN IF NOT EXISTS seal_url TEXT;
+

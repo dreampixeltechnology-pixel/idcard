@@ -1,6 +1,6 @@
 {
   "name": "Dreampixel ID Cards",
   "description": "A comprehensive SaaS platform by Dreampixel Technology for ID Card design, record management with dynamic field schemas, image cropping, and high-quality PDF/PNG/ZIP card export.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

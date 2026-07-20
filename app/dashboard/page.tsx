@@ -21,11 +21,14 @@ interface Organization {
   code: string;
   address?: string;
   contact_phone?: string;
+  logo_url?: string;
+  seal_url?: string;
   created_at: string;
 }
 
 export default function DashboardPage() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [orgStats, setOrgStats] = useState<Record<string, { expected: number; received: number }>>({});
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -35,6 +38,8 @@ export default function DashboardPage() {
   const [orgCode, setOrgCode] = useState('');
   const [orgAddress, setOrgAddress] = useState('');
   const [orgContactPhone, setOrgContactPhone] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [sealFile, setSealFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -59,15 +64,64 @@ export default function DashboardPage() {
         }
         setUser(session.user);
 
-        const { data, error } = await supabase!
+        const { data: orgsData, error: orgsError } = await supabase!
           .from('organizations')
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (error) {
-          console.error('Error fetching organizations:', error);
+        if (orgsError) {
+          console.error('Error fetching organizations:', orgsError);
         } else {
-          setOrganizations(data || []);
+          const orgs = (orgsData || []) as Organization[];
+          setOrganizations(orgs);
+
+          if (orgs.length > 0) {
+            const orgIds = orgs.map((o: Organization) => o.id);
+
+            // Fetch departments for all these orgs
+            const { data: deptsData, error: deptsError } = await supabase!
+              .from('departments')
+              .select('id, org_id, expected_count')
+              .in('org_id', orgIds);
+
+            if (deptsError) {
+              console.error('Error fetching departments:', deptsError);
+            }
+
+            const depts = (deptsData || []) as { id: string; org_id: string; expected_count: number }[];
+            const deptIds = depts.map((d) => d.id);
+
+            // Fetch count of records for these departments
+            let recordsCountMap: Record<string, number> = {};
+            if (deptIds.length > 0) {
+              const { data: recsData, error: recsError } = await supabase!
+                .from('records')
+                .select('id, dept_id')
+                .in('dept_id', deptIds);
+              
+              if (recsError) {
+                console.error('Error fetching records for stats:', recsError);
+              } else {
+                (recsData || []).forEach((r: any) => {
+                  recordsCountMap[r.dept_id] = (recordsCountMap[r.dept_id] || 0) + 1;
+                });
+              }
+            }
+
+            const statsMap: Record<string, { expected: number; received: number }> = {};
+            orgs.forEach((o: Organization) => {
+              statsMap[o.id] = { expected: 0, received: 0 };
+            });
+
+            depts.forEach((d) => {
+              if (statsMap[d.org_id]) {
+                statsMap[d.org_id].expected += d.expected_count || 0;
+                statsMap[d.org_id].received += recordsCountMap[d.id] || 0;
+              }
+            });
+
+            setOrgStats(statsMap);
+          }
         }
       } catch (err) {
         console.error('Load data error:', err);
@@ -105,56 +159,43 @@ export default function DashboardPage() {
     setSubmitting(true);
 
     try {
-      let insertPayload: any = {
-        name: orgName,
-        code: orgCode.toUpperCase(),
-        user_id: user.id,
-        address: orgAddress.trim() || null,
-        contact_phone: orgContactPhone.trim() || null
-      };
-
-      let { data, error } = await supabase!
-        .from('organizations')
-        .insert([insertPayload])
-        .select();
-
-      // Fallback in case columns do not exist yet in their Supabase database schema
-      if (error && (error.message?.includes('column') || error.code === 'P0002' || error.message?.includes('not found'))) {
-        console.warn('New columns address/contact_phone might not exist yet, falling back...', error);
-        // Retry without new columns
-        const fallbackPayload = {
-          name: orgName,
-          code: orgCode.toUpperCase(),
-          user_id: user.id
-        };
-        const fallbackResult = await supabase!
-          .from('organizations')
-          .insert([fallbackPayload])
-          .select();
-        
-        data = fallbackResult.data;
-        error = fallbackResult.error;
-
-        if (!error) {
-          alert('Organization created! Note: Address and Contact details were skipped because the Supabase database schema has not been updated. Please execute the updated supabase_migration.sql in your Supabase SQL Editor.');
-        }
+      const form = new FormData();
+      form.append('name', orgName);
+      form.append('code', orgCode.toUpperCase());
+      form.append('userId', user.id);
+      form.append('address', orgAddress.trim());
+      form.append('contactPhone', orgContactPhone.trim());
+      if (logoFile) {
+        form.append('logo', logoFile);
+      }
+      if (sealFile) {
+        form.append('seal', sealFile);
       }
 
-      if (error) {
-        if (error.code === '23505') {
-          setFormError('An organization with this code already exists. Organization codes must be unique.');
-        } else {
-          setFormError(error.message);
-        }
+      const response = await fetch('/api/org', {
+        method: 'POST',
+        body: form,
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        setFormError(result.error);
       } else {
-        if (data && data.length > 0) {
-          setOrganizations([data[0], ...organizations]);
+        if (result.organization) {
+          setOrganizations([result.organization, ...organizations]);
+          setOrgStats(prev => ({
+            ...prev,
+            [result.organization.id]: { expected: 0, received: 0 }
+          }));
         }
         setIsModalOpen(false);
         setOrgName('');
         setOrgCode('');
         setOrgAddress('');
         setOrgContactPhone('');
+        setLogoFile(null);
+        setSealFile(null);
       }
     } catch (err: any) {
       setFormError(err?.message || 'An error occurred during submission.');
@@ -283,10 +324,22 @@ export default function DashboardPage() {
               >
                 <div>
                   <div className="flex items-center justify-between mb-4">
-                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 uppercase tracking-wider font-mono">
-                      Code: {org.code}
-                    </span>
-                    <Calendar className="h-4 w-4 text-slate-400" />
+                    {org.logo_url ? (
+                      <div className="flex items-center gap-2">
+                        <img src={org.logo_url} alt="Logo" className="h-8 w-8 object-contain rounded-md border border-slate-200" />
+                        <span className="font-mono text-xs font-semibold text-slate-500 uppercase">{org.code}</span>
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 uppercase tracking-wider font-mono">
+                        Code: {org.code}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      {org.seal_url && (
+                        <img src={org.seal_url} alt="Seal" title="Official Seal Attached" className="h-6 w-6 object-contain opacity-80" />
+                      )}
+                      <Calendar className="h-4 w-4 text-slate-400" />
+                    </div>
                   </div>
                   <h3 className="font-display text-xl font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
                     {org.name}
@@ -323,6 +376,30 @@ export default function DashboardPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Stats & Progress Section */}
+                  {(() => {
+                    const stats = orgStats[org.id] || { expected: 0, received: 0 };
+                    const progressPercent = stats.expected > 0 ? Math.min(100, Math.round((stats.received / stats.expected) * 100)) : 0;
+                    return (
+                      <div className="mt-4 bg-slate-50/80 rounded-xl p-3 border border-slate-100/80 space-y-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between text-xs font-semibold">
+                          <span className="text-slate-500">Data Received / Expected</span>
+                          <span className="font-mono text-indigo-600">{stats.received} / {stats.expected}</span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-200/60 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-indigo-600 rounded-full transition-all duration-500" 
+                            style={{ width: `${progressPercent}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                          <span>Progress</span>
+                          <span>{progressPercent}%</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="mt-8 flex items-center justify-between pt-4 border-t border-slate-100">
@@ -416,6 +493,36 @@ export default function DashboardPage() {
                 <p className="text-xs text-slate-400 mt-1">
                   Enter number without spaces or symbols (e.g. 919876543210) for direct WhatsApp message.
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Organization Logo (Optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setLogoFile(file);
+                  }}
+                  className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Organization Official Seal (Optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setSealFile(file);
+                  }}
+                  className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
               </div>
 
               <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">

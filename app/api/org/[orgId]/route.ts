@@ -97,3 +97,97 @@ export async function DELETE(
     return NextResponse.json({ error: err?.message || 'Server error.' }, { status: 500 });
   }
 }
+
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ orgId: string }> }
+) {
+  try {
+    const { orgId } = await params;
+    if (!orgId) {
+      return NextResponse.json({ error: 'orgId is required.' }, { status: 400 });
+    }
+
+    const formData = await req.formData();
+    const name = formData.get('name') as string | null;
+    const address = formData.get('address') as string | null;
+    const contactPhone = formData.get('contactPhone') as string | null;
+    const logoFile = formData.get('logo') as File | null;
+    const sealFile = formData.get('seal') as File | null;
+
+    const supabaseAdmin = getSupabaseAdmin();
+
+    const updateData: Record<string, any> = {};
+    if (name !== null) updateData.name = name.trim();
+    if (address !== null) updateData.address = address.trim() || null;
+    if (contactPhone !== null) updateData.contact_phone = contactPhone.trim() || null;
+
+    // Ensure bucket exists
+    try {
+      await supabaseAdmin.storage.createBucket('org-images', { public: true });
+    } catch (err) {}
+
+    // Upload Logo if present
+    if (logoFile) {
+      const bytes = await logoFile.arrayBuffer();
+      const buffer = Buffer.from(bytes);
+      const storagePath = `org-assets/${orgId}/logo.jpg`;
+
+      const { error: logoUploadError } = await supabaseAdmin.storage
+        .from('org-images')
+        .upload(storagePath, buffer, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
+
+      if (!logoUploadError) {
+        const { data: urlData } = supabaseAdmin.storage
+          .from('org-images')
+          .getPublicUrl(storagePath);
+        updateData.logo_url = urlData.publicUrl;
+      } else {
+        console.error('Logo upload error:', logoUploadError);
+      }
+    }
+
+    // Upload Seal if present
+    if (sealFile) {
+      const bytes = await sealFile.arrayBuffer();
+      const buffer = Buffer.from(bytes);
+      const storagePath = `org-assets/${orgId}/seal.jpg`;
+
+      const { error: sealUploadError } = await supabaseAdmin.storage
+        .from('org-images')
+        .upload(storagePath, buffer, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
+
+      if (!sealUploadError) {
+        const { data: urlData } = supabaseAdmin.storage
+          .from('org-images')
+          .getPublicUrl(storagePath);
+        updateData.seal_url = urlData.publicUrl;
+      } else {
+        console.error('Seal upload error:', sealUploadError);
+      }
+    }
+
+    const { data: updatedOrg, error: updateError } = await supabaseAdmin
+      .from('organizations')
+      .update(updateData)
+      .eq('id', orgId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true, organization: updatedOrg });
+  } catch (err: any) {
+    console.error('Error updating organization details:', err);
+    return NextResponse.json({ error: err?.message || 'Server error.' }, { status: 500 });
+  }
+}
+

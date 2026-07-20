@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseClient } from '@/lib/supabase-client';
 import ImageEditor from '@/components/image-editor';
+import CameraCapture from '@/components/camera-capture';
 
 import { 
   ArrowLeft, 
@@ -27,7 +28,8 @@ import {
   AlertTriangle,
   UserCheck,
   Link2,
-  FileArchive
+  FileArchive,
+  Camera
 } from 'lucide-react';
 
 interface Department {
@@ -80,6 +82,9 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [editorImgSrc, setEditorImgSrc] = useState<string>('');
   const [activeImageField, setActiveImageField] = useState<string>(''); // name of the field receiving the image
   const [editorTargetRecordId, setEditorTargetRecordId] = useState<string | null>(null); // if row-specific photo upload
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraActiveFieldName, setCameraActiveFieldName] = useState<string>('');
+  const [cameraActiveRecordId, setCameraActiveRecordId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Excel Bulk Modals
@@ -103,6 +108,39 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [updatingDept, setUpdatingDept] = useState(false);
   const [deletingDept, setDeletingDept] = useState(false);
   const [editDeptError, setEditDeptError] = useState<string | null>(null);
+
+  // Filtering & Search states
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterField, setFilterField] = useState('All');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'uploaded' | 'missing'>('all');
+
+  const filteredRecords = records.filter(record => {
+    // 1. Status Filter
+    if (statusFilter === 'uploaded' && !record.photo_uploaded) return false;
+    if (statusFilter === 'missing' && record.photo_uploaded) return false;
+
+    // 2. Dynamic fields filtering / SearchTerm
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase().trim();
+
+    // If a specific field filter is chosen
+    if (filterField !== 'All') {
+      const val = record.data[filterField];
+      return val ? String(val).toLowerCase().includes(term) : false;
+    }
+
+    // Global search across all fields and serial number
+    if (record.serial_number.toString().includes(term)) return true;
+    for (const f of fieldsSchema) {
+      const val = record.data[f.name];
+      if (val && String(val).toLowerCase().includes(term)) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  const isFiltered = searchTerm.trim() !== '' || statusFilter !== 'all';
 
   // ZIP Export States
   const [isZipExporting, setIsZipExporting] = useState(false);
@@ -364,6 +402,14 @@ export default function DeptDetailPage({ params }: PageProps) {
     }
   };
 
+  const handleCameraCapture = (dataUrl: string) => {
+    setIsCameraOpen(false);
+    setEditorImgSrc(dataUrl);
+    setActiveImageField(cameraActiveFieldName);
+    setEditorTargetRecordId(cameraActiveRecordId);
+    setIsEditorOpen(true);
+  };
+
   // Submit single entry
   const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -382,7 +428,10 @@ export default function DeptDetailPage({ params }: PageProps) {
       const cleanedData: Record<string, any> = {};
 
       for (const field of fieldsSchema) {
-        const val = singleFormData[field.name];
+        let val = singleFormData[field.name];
+        if (field.type === 'date' && val) {
+          val = formatToDDMMYYYY(val);
+        }
         if (field.type === 'image' && field.name.toLowerCase() === 'photo' && val) {
           // Convert Base64 back to file blob
           const res = await fetch(val);
@@ -431,7 +480,11 @@ export default function DeptDetailPage({ params }: PageProps) {
     setEditingRecord(record);
     const initialForm: Record<string, any> = {};
     fieldsSchema.forEach(f => {
-      initialForm[f.name] = record.data[f.name] || '';
+      let val = record.data[f.name] || '';
+      if (f.type === 'date' && val) {
+        val = convertDDMMYYYYToYYYYMMDD(val);
+      }
+      initialForm[f.name] = val;
     });
     // Set Photo preview url if pre-existing
     if (record.photo_url) {
@@ -550,7 +603,7 @@ export default function DeptDetailPage({ params }: PageProps) {
   const handleBulkSubmit = async () => {
     setExcelSubmitting(true);
     setExcelUploadError(null);
-
+ 
     try {
       // Map rows conforming to schema keys
       const formattedRows = excelRows.map((row) => {
@@ -558,24 +611,7 @@ export default function DeptDetailPage({ params }: PageProps) {
         fieldsSchema.forEach((f) => {
           let val = row[f.name] !== undefined ? String(row[f.name]) : '';
           if (f.type === 'date' && val) {
-            const trimmed = val.trim();
-            const dmMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-            if (dmMatch) {
-              const dd = dmMatch[1].padStart(2, '0');
-              const mm = dmMatch[2].padStart(2, '0');
-              const yyyy = dmMatch[3];
-              val = `${yyyy}-${mm}-${dd}`;
-            } else {
-              try {
-                const d = new Date(trimmed);
-                if (!isNaN(d.getTime())) {
-                  const yyyy = d.getFullYear();
-                  const mm = String(d.getMonth() + 1).padStart(2, '0');
-                  const dd = String(d.getDate()).padStart(2, '0');
-                  val = `${yyyy}-${mm}-${dd}`;
-                }
-              } catch (e) {}
-            }
+            val = formatToDDMMYYYY(val);
           }
           rowData[f.name] = val;
         });
@@ -662,13 +698,19 @@ export default function DeptDetailPage({ params }: PageProps) {
       const response = await fetch('https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf');
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        const len = bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        const base64Font = btoa(binary);
+        
+        // Native browser FileReader based safe base64 converter
+        const base64Font = await new Promise<string>((resolve) => {
+          const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const dataUrl = e.target?.result as string;
+            const base64 = dataUrl.split(',')[1];
+            resolve(base64);
+          };
+          reader.readAsDataURL(blob);
+        });
+
         doc.addFileToVFS('NotoSansDevanagari-Regular.ttf', base64Font);
         doc.addFont('NotoSansDevanagari-Regular.ttf', 'NotoSansDevanagari', 'normal');
         fontName = 'NotoSansDevanagari';
@@ -709,6 +751,12 @@ export default function DeptDetailPage({ params }: PageProps) {
       styles: {
         font: fontName,
       },
+      headStyles: {
+        font: fontName,
+      },
+      bodyStyles: {
+        font: fontName,
+      },
       didParseCell: (dataCell: any) => {
         const text = dataCell.cell.text[0];
         if (text === 'Not Received') {
@@ -724,14 +772,85 @@ export default function DeptDetailPage({ params }: PageProps) {
     doc.save(`${organization.code}-${dept.code}-report.pdf`);
   };
 
-  // Format date string from YYYY-MM-DD to DD-MM-YYYY
-  const formatDateString = (val: string): string => {
+  // Robust date-handling helpers
+  const formatToDDMMYYYY = (val: any): string => {
     if (!val) return '';
-    const dateMatch = val.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (dateMatch) {
-      return `${dateMatch[3]}-${dateMatch[2]}-${dateMatch[1]}`;
+    const trimmed = String(val).trim();
+    if (!trimmed) return '';
+
+    // 1. If it matches DD-MM-YYYY or DD/MM/YYYY
+    const dmMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (dmMatch) {
+      const dd = dmMatch[1].padStart(2, '0');
+      const mm = dmMatch[2].padStart(2, '0');
+      const yyyy = dmMatch[3];
+      return `${dd}-${mm}-${yyyy}`;
+    }
+
+    // 2. If it matches YYYY-MM-DD or YYYY/MM/DD
+    const ymdMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+    if (ymdMatch) {
+      const yyyy = ymdMatch[1];
+      const mm = ymdMatch[2].padStart(2, '0');
+      const dd = ymdMatch[3].padStart(2, '0');
+      return `${dd}-${mm}-${yyyy}`;
+    }
+
+    // 3. If it's a normal number (like an Excel serial date number or just a timestamp)
+    const num = Number(trimmed);
+    if (!isNaN(num) && num > 1000) {
+      if (num < 100000) {
+        try {
+          const date = new Date((num - 25569) * 86400 * 1000);
+          if (!isNaN(date.getTime())) {
+            const dd = String(date.getDate()).padStart(2, '0');
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const yyyy = date.getFullYear();
+            return `${dd}-${mm}-${yyyy}`;
+          }
+        } catch (e) {}
+      } else {
+        try {
+          const date = new Date(num);
+          if (!isNaN(date.getTime())) {
+            const dd = String(date.getDate()).padStart(2, '0');
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const yyyy = date.getFullYear();
+            return `${dd}-${mm}-${yyyy}`;
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 4. Try parsing as a generic date string
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}-${mm}-${yyyy}`;
+      }
+    } catch (e) {}
+
+    return trimmed;
+  };
+
+  const convertDDMMYYYYToYYYYMMDD = (val: string): string => {
+    if (!val) return '';
+    const match = val.trim().match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (match) {
+      const dd = match[1].padStart(2, '0');
+      const mm = match[2].padStart(2, '0');
+      const yyyy = match[3];
+      return `${yyyy}-${mm}-${dd}`;
     }
     return val;
+  };
+
+  // Format date string
+  const formatDateString = (val: string): string => {
+    return formatToDDMMYYYY(val);
   };
 
   // Export all cards + Excel metadata as ZIP
@@ -1025,9 +1144,51 @@ export default function DeptDetailPage({ params }: PageProps) {
 
         {/* Matrix Table Preview */}
         <section className="bg-white border border-slate-200/80 rounded-2xl shadow-sm overflow-hidden" id="records-table-container">
-          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <h3 className="font-display font-bold text-slate-900 text-base">Participant Preview Matrix</h3>
-            <span className="text-xs text-slate-400 font-medium font-mono">Quota range: 1 - {expectedCount}</span>
+          <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="font-display font-bold text-slate-900 text-base">Participant Preview Matrix</h3>
+              <p className="text-xs text-slate-400 font-medium font-mono">Quota range: 1 - {expectedCount}</p>
+            </div>
+
+            {/* Filtering & Search Controls */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Search Input */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search records..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 pl-8 text-xs font-semibold text-slate-700 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all placeholder:text-slate-400 w-44"
+                />
+                <svg className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </div>
+
+              {/* Dynamic Field Selector */}
+              <select
+                value={filterField}
+                onChange={(e) => setFilterField(e.target.value)}
+                className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-600 outline-none focus:border-indigo-500 transition-all cursor-pointer"
+              >
+                <option value="All">All Fields</option>
+                {fieldsSchema.map((f, i) => (
+                  <option key={i} value={f.name}>{f.name}</option>
+                ))}
+              </select>
+
+              {/* Portrait Status Selector */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-600 outline-none focus:border-indigo-500 transition-all cursor-pointer"
+              >
+                <option value="all">All Portrait Status</option>
+                <option value="uploaded">With Portrait</option>
+                <option value="missing">Missing Portrait</option>
+              </select>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -1057,143 +1218,285 @@ export default function DeptDetailPage({ params }: PageProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
-                {Array.from({ length: expectedCount }).map((_, idx) => {
-                  const serialNum = idx + 1;
-                  const record = records.find(r => r.serial_number === serialNum);
+                {isFiltered ? (
+                  filteredRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={fieldsSchema.length + 4} className="text-center py-10 text-slate-400 font-semibold italic">
+                        No records match the current filter criteria.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredRecords.map((record) => {
+                      const serialNum = record.serial_number;
+                      return (
+                        <tr key={record.id} className="hover:bg-slate-50/60 transition-colors animate-fade-in" id={`row-record-${serialNum}`}>
+                          <td className="px-4 py-4 w-10">
+                            <input
+                              type="checkbox"
+                              checked={selectedRecordIds.includes(record.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedRecordIds([...selectedRecordIds, record.id]);
+                                } else {
+                                  setSelectedRecordIds(selectedRecordIds.filter(id => id !== record.id));
+                                }
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                            />
+                          </td>
+                          <td className="px-6 py-4 font-mono font-semibold text-slate-600">{serialNum}</td>
+                          
+                          {/* Render schema fields */}
+                          {fieldsSchema.map((field, fIdx) => {
+                            let val = record.data[field.name];
+                            const isMissing = val === undefined || val === null || val === '';
+                            if (!isMissing && field.type === 'date') {
+                              val = formatDateString(val);
+                            }
+                            return (
+                              <td 
+                                key={fIdx} 
+                                className={`px-4 py-4 ${isMissing ? 'bg-red-50/40 text-red-600 font-semibold' : 'text-slate-700'}`}
+                              >
+                                {isMissing ? 'Missing' : val}
+                              </td>
+                            );
+                          })}
 
-                  if (!record) {
-                    // Empty row highlight
+                          {/* Photo Column - Size Doubled (h-20 w-20) for 2x clarity */}
+                          <td className="px-4 py-4">
+                            {record.photo_uploaded && record.photo_url ? (
+                              <div className="relative h-20 w-20 rounded-lg overflow-hidden border border-slate-200 shadow-sm hover:scale-105 transition-transform duration-200 cursor-pointer">
+                                <img 
+                                  src={record.photo_url} 
+                                  alt="Avatar" 
+                                  className="h-full w-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded-md w-fit">
+                                <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+                                <span>Missing</span>
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td className="px-6 py-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* Direct photo upload tool if missing or changing */}
+                              <div className="relative">
+                                <input 
+                                  type="file" 
+                                  accept="image/*"
+                                  className="hidden" 
+                                  id={`row-file-${record.id}`}
+                                  onChange={(e) => handlePhotoSelect(e, 'Photo', record.id)}
+                                />
+                                <label 
+                                  htmlFor={`row-file-${record.id}`}
+                                  className="cursor-pointer p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                                  title="Upload Photo"
+                                >
+                                  <ImageIcon className="h-4 w-4" />
+                                </label>
+                              </div>
+
+                              <button
+                                onClick={() => {
+                                  setCameraActiveFieldName('Photo');
+                                  setCameraActiveRecordId(record.id);
+                                  setIsCameraOpen(true);
+                                }}
+                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                                title="Capture with Camera"
+                              >
+                                <Camera className="h-4 w-4" />
+                              </button>
+
+                              <button
+                                onClick={() => handleOpenEdit(record)}
+                                className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                                title="Edit Record"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
+
+                              {record.photo_uploaded && (
+                                <a
+                                  href={`/api/cards/single/${record.id}`}
+                                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
+                                  title="Export Card PNG"
+                                  id={`export-single-btn-${record.id}`}
+                                >
+                                  <FileSpreadsheet className="h-4 w-4" />
+                                </a>
+                              )}
+
+                              <button
+                                onClick={() => handleDeleteRecord(record.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 hover:border-rose-100 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
+                                title="Delete Record"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )
+                ) : (
+                  Array.from({ length: expectedCount }).map((_, idx) => {
+                    const serialNum = idx + 1;
+                    const record = records.find(r => r.serial_number === serialNum);
+
+                    if (!record) {
+                      // Empty row highlight
+                      return (
+                        <tr key={serialNum} className="bg-red-50/20 hover:bg-red-50/40 transition-colors animate-fade-in" id={`row-empty-${serialNum}`}>
+                          <td className="px-4 py-4 w-10"></td>
+                          <td className="px-6 py-4 font-mono font-bold text-red-600">{serialNum}</td>
+                          {fieldsSchema.map((_, fIdx) => (
+                            <td key={fIdx} className="px-4 py-4 text-red-500 italic font-medium">Not Received</td>
+                          ))}
+                          <td className="px-4 py-4 text-red-500 italic font-medium">Missing</td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={() => {
+                                setEditingRecord(null);
+                                setTargetSerialNumber(serialNum);
+                                setSingleFormData({});
+                                setIsSingleModalOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-500 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg px-2.5 py-1.5 transition-all"
+                            >
+                              <Plus className="h-3 w-3" /> Fill Entry
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    // Record exists
                     return (
-                      <tr key={serialNum} className="bg-red-50/20 hover:bg-red-50/40 transition-colors animate-fade-in" id={`row-empty-${serialNum}`}>
-                        <td className="px-4 py-4 w-10"></td>
-                        <td className="px-6 py-4 font-mono font-bold text-red-600">{serialNum}</td>
-                        {fieldsSchema.map((_, fIdx) => (
-                          <td key={fIdx} className="px-4 py-4 text-red-500 italic font-medium">Not Received</td>
-                        ))}
-                        <td className="px-4 py-4 text-red-500 italic font-medium">Missing</td>
-                        <td className="px-6 py-4 text-right">
-                          <button
-                            onClick={() => {
-                              setEditingRecord(null);
-                              setTargetSerialNumber(serialNum);
-                              setSingleFormData({});
-                              setIsSingleModalOpen(true);
+                      <tr key={record.id} className="hover:bg-slate-50/60 transition-colors" id={`row-record-${serialNum}`}>
+                        <td className="px-4 py-4 w-10">
+                          <input
+                            type="checkbox"
+                            checked={selectedRecordIds.includes(record.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedRecordIds([...selectedRecordIds, record.id]);
+                              } else {
+                                setSelectedRecordIds(selectedRecordIds.filter(id => id !== record.id));
+                              }
                             }}
-                            className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-500 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg px-2.5 py-1.5 transition-all"
-                          >
-                            <Plus className="h-3 w-3" /> Fill Entry
-                          </button>
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                          />
+                        </td>
+                        <td className="px-6 py-4 font-mono font-semibold text-slate-600">{serialNum}</td>
+                        
+                        {/* Render schema fields */}
+                        {fieldsSchema.map((field, fIdx) => {
+                          let val = record.data[field.name];
+                          const isMissing = val === undefined || val === null || val === '';
+                          if (!isMissing && field.type === 'date') {
+                            val = formatDateString(val);
+                          }
+                          return (
+                            <td 
+                              key={fIdx} 
+                              className={`px-4 py-4 ${isMissing ? 'bg-red-50/40 text-red-600 font-semibold' : 'text-slate-700'}`}
+                            >
+                              {isMissing ? 'Missing' : val}
+                            </td>
+                          );
+                        })}
+
+                        {/* Photo Column - Size Doubled (h-20 w-20) for 2x clarity */}
+                        <td className="px-4 py-4">
+                          {record.photo_uploaded && record.photo_url ? (
+                            <div className="relative h-20 w-20 rounded-lg overflow-hidden border border-slate-200 shadow-sm hover:scale-105 transition-transform duration-200 cursor-pointer">
+                              <img 
+                                src={record.photo_url} 
+                                alt="Avatar" 
+                                className="h-full w-full object-cover"
+                              />
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded-md w-fit">
+                              <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+                              <span>Missing</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Actions */}
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Direct photo upload tool if missing or changing */}
+                            <div className="relative">
+                              <input 
+                                type="file" 
+                                accept="image/*"
+                                className="hidden" 
+                                id={`row-file-${record.id}`}
+                                onChange={(e) => handlePhotoSelect(e, 'Photo', record.id)}
+                              />
+                              <label 
+                                htmlFor={`row-file-${record.id}`}
+                                className="cursor-pointer p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                                title="Upload Photo"
+                              >
+                                <ImageIcon className="h-4 w-4" />
+                              </label>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setCameraActiveFieldName('Photo');
+                                setCameraActiveRecordId(record.id);
+                                setIsCameraOpen(true);
+                              }}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                              title="Capture with Camera"
+                            >
+                              <Camera className="h-4 w-4" />
+                            </button>
+
+                            <button
+                              onClick={() => handleOpenEdit(record)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                              title="Edit Record"
+                            >
+                              <Edit3 className="h-4 w-4" />
+                            </button>
+
+                            {record.photo_uploaded && (
+                              <a
+                                href={`/api/cards/single/${record.id}`}
+                                className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
+                                title="Export Card PNG"
+                                id={`export-single-btn-${record.id}`}
+                              >
+                                <FileSpreadsheet className="h-4 w-4" />
+                              </a>
+                            )}
+
+                            <button
+                              onClick={() => handleDeleteRecord(record.id)}
+                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
+                              title="Delete Record"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
-                  }
-
-                  // Record exists
-                  return (
-                    <tr key={record.id} className="hover:bg-slate-50/60 transition-colors" id={`row-record-${serialNum}`}>
-                      <td className="px-4 py-4 w-10">
-                        <input
-                          type="checkbox"
-                          checked={selectedRecordIds.includes(record.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedRecordIds([...selectedRecordIds, record.id]);
-                            } else {
-                              setSelectedRecordIds(selectedRecordIds.filter(id => id !== record.id));
-                            }
-                          }}
-                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-                        />
-                      </td>
-                      <td className="px-6 py-4 font-mono font-semibold text-slate-600">{serialNum}</td>
-                      
-                      {/* Render schema fields */}
-                      {fieldsSchema.map((field, fIdx) => {
-                        let val = record.data[field.name];
-                        const isMissing = val === undefined || val === null || val === '';
-                        if (!isMissing && field.type === 'date') {
-                          val = formatDateString(val);
-                        }
-                        return (
-                          <td 
-                            key={fIdx} 
-                            className={`px-4 py-4 ${isMissing ? 'bg-red-50/40 text-red-600 font-semibold' : 'text-slate-700'}`}
-                          >
-                            {isMissing ? 'Missing' : val}
-                          </td>
-                        );
-                      })}
-
-                      {/* Photo Column - Size Doubled (h-20 w-20) for 2x clarity */}
-                      <td className="px-4 py-4">
-                        {record.photo_uploaded && record.photo_url ? (
-                          <div className="relative h-20 w-20 rounded-lg overflow-hidden border border-slate-200 shadow-sm hover:scale-105 transition-transform duration-200 cursor-pointer">
-                            <img 
-                              src={record.photo_url} 
-                              alt="Avatar" 
-                              className="h-full w-full object-cover"
-                            />
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded-md w-fit">
-                            <ImageIcon className="h-3.5 w-3.5 shrink-0" />
-                            <span>Missing</span>
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Direct photo upload tool if missing or changing */}
-                          <div className="relative">
-                            <input 
-                              type="file" 
-                              accept="image/*"
-                              className="hidden" 
-                              id={`row-file-${record.id}`}
-                              onChange={(e) => handlePhotoSelect(e, 'Photo', record.id)}
-                            />
-                            <label 
-                              htmlFor={`row-file-${record.id}`}
-                              className="cursor-pointer p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                              title="Upload Photo"
-                            >
-                              <ImageIcon className="h-4 w-4" />
-                            </label>
-                          </div>
-
-                          <button
-                            onClick={() => handleOpenEdit(record)}
-                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                            title="Edit Record"
-                          >
-                            <Edit3 className="h-4 w-4" />
-                          </button>
-
-                          {record.photo_uploaded && (
-                            <a
-                              href={`/api/cards/single/${record.id}`}
-                              className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
-                              title="Export Card PNG"
-                              id={`export-single-btn-${record.id}`}
-                            >
-                              <FileSpreadsheet className="h-4 w-4" />
-                            </a>
-                          )}
-
-                          <button
-                            onClick={() => handleDeleteRecord(record.id)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                            title="Delete Record"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -1279,7 +1582,7 @@ export default function DeptDetailPage({ params }: PageProps) {
 
                   {field.type === 'image' && (
                     <div className="space-y-2">
-                      <div className="flex gap-3 items-center">
+                      <div className="flex gap-2.5 items-center">
                         <input 
                           type="file" 
                           accept="image/*"
@@ -1292,12 +1595,24 @@ export default function DeptDetailPage({ params }: PageProps) {
                           onClick={() => fileInputRef.current?.click()}
                           className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors"
                         >
-                          <ImageIcon className="h-4 w-4" /> Pick & Edit Image
+                          <ImageIcon className="h-4 w-4" /> Pick Image
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCameraActiveFieldName(field.name);
+                            setCameraActiveRecordId(null);
+                            setIsCameraOpen(true);
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-150 rounded-xl text-xs font-semibold transition-colors"
+                        >
+                          <Camera className="h-4 w-4" /> Camera
                         </button>
                         
                         {singleFormData[field.name] && (
                           <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Cropped Ready
+                            <CheckCircle2 className="h-3.5 w-3.5" /> Ready
                           </span>
                         )}
                       </div>
@@ -1323,7 +1638,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                     Card Photo / Portrait
                   </label>
                   <div className="space-y-2">
-                    <div className="flex gap-3 items-center">
+                    <div className="flex gap-2.5 items-center">
                       <input 
                         type="file" 
                         accept="image/*"
@@ -1337,10 +1652,22 @@ export default function DeptDetailPage({ params }: PageProps) {
                       >
                         <ImageIcon className="h-4 w-4" /> Choose Photo
                       </label>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCameraActiveFieldName('Photo');
+                          setCameraActiveRecordId(null);
+                          setIsCameraOpen(true);
+                        }}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-150 rounded-xl text-xs font-semibold transition-colors"
+                      >
+                        <Camera className="h-4 w-4" /> Camera
+                      </button>
                       
                       {singleFormData['Photo'] && (
                         <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Photo Attached
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Attached
                         </span>
                       )}
                     </div>
@@ -1497,6 +1824,14 @@ export default function DeptDetailPage({ params }: PageProps) {
           imageSrc={editorImgSrc}
           onClose={() => setIsEditorOpen(false)}
           onSave={handleEditorSave}
+        />
+      )}
+
+      {/* Camera Capture Modal overlay */}
+      {isCameraOpen && (
+        <CameraCapture 
+          onCapture={handleCameraCapture}
+          onClose={() => setIsCameraOpen(false)}
         />
       )}
 

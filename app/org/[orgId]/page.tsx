@@ -38,6 +38,8 @@ interface Organization {
   code: string;
   address?: string;
   contact_phone?: string;
+  logo_url?: string;
+  seal_url?: string;
 }
 
 interface PageProps {
@@ -67,6 +69,8 @@ export default function OrgDetailPage({ params }: PageProps) {
   const [editOrgName, setEditOrgName] = useState('');
   const [editOrgAddress, setEditOrgAddress] = useState('');
   const [editOrgContactPhone, setEditOrgContactPhone] = useState('');
+  const [editLogoFile, setEditLogoFile] = useState<File | null>(null);
+  const [editSealFile, setEditSealFile] = useState<File | null>(null);
   const [updatingOrg, setUpdatingOrg] = useState(false);
   const [deletingOrg, setDeletingOrg] = useState(false);
 
@@ -79,50 +83,36 @@ export default function OrgDetailPage({ params }: PageProps) {
     setUpdatingOrg(true);
     setFormError(null);
     try {
-      let updatePayload: any = {
-        name: editOrgName.trim(),
-        address: editOrgAddress.trim() || null,
-        contact_phone: editOrgContactPhone.trim() || null
-      };
-
-      let { error } = await supabase!
-        .from('organizations')
-        .update(updatePayload)
-        .eq('id', orgId);
-
-      // Fallback in case columns do not exist yet in their Supabase database schema
-      if (error && (error.message?.includes('column') || error.code === 'P0002' || error.message?.includes('not found'))) {
-        console.warn('New columns address/contact_phone might not exist yet, falling back...', error);
-        // Retry with name only
-        const fallbackPayload = { name: editOrgName.trim() };
-        const fallbackResult = await supabase!
-          .from('organizations')
-          .update(fallbackPayload)
-          .eq('id', orgId);
-
-        error = fallbackResult.error;
-
-        if (!error) {
-          setOrganization(prev => prev ? { ...prev, name: editOrgName.trim() } : null);
-          setIsEditOrgModalOpen(false);
-          alert('Organization updated! Note: Address and Contact details were skipped because the Supabase database schema has not been updated. Please execute the updated supabase_migration.sql in your Supabase SQL Editor.');
-          return;
-        }
+      const form = new FormData();
+      form.append('name', editOrgName.trim());
+      form.append('address', editOrgAddress.trim());
+      form.append('contactPhone', editOrgContactPhone.trim());
+      if (editLogoFile) {
+        form.append('logo', editLogoFile);
+      }
+      if (editSealFile) {
+        form.append('seal', editSealFile);
       }
 
-      if (error) {
-        setFormError(error.message);
+      const response = await fetch(`/api/org/${orgId}`, {
+        method: 'PUT',
+        body: form,
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        setFormError(result.error);
       } else {
-        setOrganization(prev => prev ? { 
-          ...prev, 
-          name: editOrgName.trim(), 
-          address: editOrgAddress.trim() || undefined, 
-          contact_phone: editOrgContactPhone.trim() || undefined 
-        } : null);
+        if (result.organization) {
+          setOrganization(result.organization);
+        }
         setIsEditOrgModalOpen(false);
+        setEditLogoFile(null);
+        setEditSealFile(null);
       }
     } catch (err: any) {
-      setFormError(err?.message || 'Failed to update organization name.');
+      setFormError(err?.message || 'Failed to update organization details.');
     } finally {
       setUpdatingOrg(false);
     }
@@ -378,34 +368,47 @@ export default function OrgDetailPage({ params }: PageProps) {
       {/* Main Body */}
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         {/* Organization Info Banner */}
-        {(organization.address || organization.contact_phone) && (
+        {(organization.address || organization.contact_phone || organization.logo_url || organization.seal_url) && (
           <div className="bg-white border border-slate-200/60 rounded-2xl p-5 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 animate-fade-in shadow-sm">
-            <div className="flex flex-col md:flex-row gap-4 md:gap-10">
-              {organization.address && (
-                <div className="space-y-1">
-                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Office Address</span>
-                  <span className="text-sm font-semibold text-slate-700">{organization.address}</span>
+            <div className="flex items-center gap-4">
+              {organization.logo_url && (
+                <img src={organization.logo_url} alt="Logo" className="h-14 w-14 object-contain rounded-xl border border-slate-200/80 bg-slate-50 p-1 shrink-0" />
+              )}
+              <div className="flex flex-col md:flex-row gap-4 md:gap-10">
+                {organization.address && (
+                  <div className="space-y-1">
+                    <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Office Address</span>
+                    <span className="text-sm font-semibold text-slate-700">{organization.address}</span>
+                  </div>
+                )}
+                {organization.contact_phone && (
+                  <div className="space-y-1">
+                    <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contact Phone</span>
+                    <span className="text-sm font-mono font-semibold text-slate-700">{organization.contact_phone}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {organization.seal_url && (
+                <div className="flex flex-col items-center gap-0.5 border border-slate-150 bg-slate-50/50 rounded-lg p-1.5 px-2">
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Official Seal</span>
+                  <img src={organization.seal_url} alt="Official Seal" className="h-8 w-8 object-contain" />
                 </div>
               )}
               {organization.contact_phone && (
-                <div className="space-y-1">
-                  <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Contact Phone</span>
-                  <span className="text-sm font-mono font-semibold text-slate-700">{organization.contact_phone}</span>
-                </div>
+                <a
+                  href={`https://wa.me/${organization.contact_phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Hello! This is a friendly reminder regarding your ID Card Generation service for next year.`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 transition-colors shadow-md shadow-emerald-100 cursor-pointer border border-emerald-500"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  <span>Message Client (WhatsApp)</span>
+                </a>
               )}
             </div>
-
-            {organization.contact_phone && (
-              <a
-                href={`https://wa.me/${organization.contact_phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Hello! This is a friendly reminder regarding your ID Card Generation service for next year.`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 transition-colors shadow-md shadow-emerald-100 cursor-pointer border border-emerald-500"
-              >
-                <MessageCircle className="h-4 w-4" />
-                <span>Message Client (WhatsApp)</span>
-              </a>
-            )}
           </div>
         )}
 
@@ -742,6 +745,36 @@ export default function OrgDetailPage({ params }: PageProps) {
                 <p className="text-xs text-slate-400 mt-1">
                   Enter digits only (e.g. 919876543210) for direct WhatsApp message reminder functionality.
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Update Logo (Optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setEditLogoFile(file);
+                  }}
+                  className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Update Official Seal (Optional)
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) setEditSealFile(file);
+                  }}
+                  className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
               </div>
 
               <div className="mt-6 flex justify-between gap-3 pt-4 border-t border-slate-100">
