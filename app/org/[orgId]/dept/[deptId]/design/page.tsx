@@ -533,43 +533,28 @@ export default function CardDesignerPage({ params }: PageProps) {
   // Handle uploading custom card background
   const handleBackgroundUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !supabase) return;
+    if (!file) return;
 
     setSubmitting(true);
     setSuccessMsg(null);
     setErrorMsg(null);
 
     try {
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-      const storagePath = `backgrounds/${deptId}.jpg`;
+      const form = new FormData();
+      form.append('file', file);
 
-      // Create bucket if not exists
-      try {
-        const { data: bucketData } = await supabase.storage.getBucket('org-images');
-        if (!bucketData) {
-          await supabase.storage.createBucket('org-images', { public: true });
-        }
-      } catch {
-        // Safe creation fallback
+      const response = await fetch(`/api/card-design/${deptId}/upload-bg`, {
+        method: 'POST',
+        body: form
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        throw new Error(result.error);
       }
 
-      const { error: uploadError } = await supabase.storage
-        .from('org-images')
-        .upload(storagePath, buffer, {
-          contentType: 'image/jpeg',
-          upsert: true
-        });
-
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-
-      const { data: urlData } = supabase.storage
-        .from('org-images')
-        .getPublicUrl(storagePath);
-
-      setBackgroundUrl(urlData.publicUrl);
+      setBackgroundUrl(result.url);
       setSuccessMsg('Background image uploaded successfully!');
     } catch (err: any) {
       setErrorMsg(err?.message || 'Failed to upload background.');

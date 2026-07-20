@@ -161,7 +161,7 @@ export default function DashboardPage() {
                 <Building2 className="h-5 w-5" />
               </div>
               <span className="font-display text-xl font-bold tracking-tight text-slate-900">
-                Workspace ID
+                Dreampixel Technology
               </span>
             </div>
 
@@ -171,13 +171,13 @@ export default function DashboardPage() {
                   <User className="h-4 w-4" />
                 </div>
                 <span className="hidden font-medium sm:inline">
-                  Shop Owner (Private)
+                  Dreampixel Owner (Admin)
                 </span>
               </div>
 
               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 font-mono border border-emerald-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                Shop Active
+                Console Online
               </span>
             </div>
           </div>

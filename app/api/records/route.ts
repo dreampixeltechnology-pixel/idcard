@@ -40,21 +40,38 @@ export async function POST(req: NextRequest) {
     const orgCode = orgInfo.code.toUpperCase();
     const deptCode = deptInfo.code.toUpperCase();
 
-    // 2. Compute next serial_number
-    const { data: maxRecord, error: maxError } = await supabaseAdmin
-      .from('records')
-      .select('serial_number')
-      .eq('dept_id', deptId)
-      .order('serial_number', { ascending: false })
-      .limit(1);
-
-    if (maxError) {
-      return NextResponse.json({ error: 'Failed to compute serial number.' }, { status: 500 });
-    }
-
+    // 2. Compute or validate serial_number
     let serialNumber = 1;
-    if (maxRecord && maxRecord.length > 0) {
-      serialNumber = maxRecord[0].serial_number + 1;
+    const clientSerialStr = formData.get('serialNumber');
+    if (clientSerialStr) {
+      serialNumber = parseInt(clientSerialStr as string);
+      
+      // Check if this slot/serial number is already taken
+      const { data: existingRec } = await supabaseAdmin
+        .from('records')
+        .select('id')
+        .eq('dept_id', deptId)
+        .eq('serial_number', serialNumber)
+        .maybeSingle();
+        
+      if (existingRec) {
+        return NextResponse.json({ error: `Serial Number #${serialNumber} is already occupied by another entry.` }, { status: 400 });
+      }
+    } else {
+      const { data: maxRecord, error: maxError } = await supabaseAdmin
+        .from('records')
+        .select('serial_number')
+        .eq('dept_id', deptId)
+        .order('serial_number', { ascending: false })
+        .limit(1);
+
+      if (maxError) {
+        return NextResponse.json({ error: 'Failed to compute serial number.' }, { status: 500 });
+      }
+
+      if (maxRecord && maxRecord.length > 0) {
+        serialNumber = maxRecord[0].serial_number + 1;
+      }
     }
 
     let photoUrl = null;

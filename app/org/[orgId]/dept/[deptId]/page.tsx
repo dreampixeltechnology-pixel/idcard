@@ -6,9 +6,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getSupabaseClient } from '@/lib/supabase-client';
 import ImageEditor from '@/components/image-editor';
-import * as XLSX from 'xlsx';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 
 import { 
   ArrowLeft, 
@@ -72,6 +69,7 @@ export default function DeptDetailPage({ params }: PageProps) {
   // Single Entry Modals
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<RecordRow | null>(null);
+  const [targetSerialNumber, setTargetSerialNumber] = useState<number | null>(null);
   const [singleFormData, setSingleFormData] = useState<Record<string, any>>({});
   const [singleFormError, setSingleFormError] = useState<string | null>(null);
   const [singleSubmitting, setSingleSubmitting] = useState(false);
@@ -100,8 +98,58 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [formulaCopied, setFormulaCopied] = useState(false);
   const [editDeptName, setEditDeptName] = useState('');
   const [editExpectedCount, setEditExpectedCount] = useState<number>(0);
+  const [editFields, setEditFields] = useState<Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>>([]);
   const [updatingDept, setUpdatingDept] = useState(false);
+  const [deletingDept, setDeletingDept] = useState(false);
   const [editDeptError, setEditDeptError] = useState<string | null>(null);
+
+  const handleAddEditField = () => {
+    setEditFields([...editFields, { name: '', type: 'text' }]);
+  };
+
+  const handleRemoveEditField = (index: number) => {
+    if (editFields.length <= 1) {
+      setEditDeptError('At least one schema field is required.');
+      return;
+    }
+    const updated = [...editFields];
+    updated.splice(index, 1);
+    setEditFields(updated);
+  };
+
+  const handleEditFieldChange = (index: number, key: 'name' | 'type', value: string) => {
+    const updated = [...editFields];
+    if (key === 'name') {
+      updated[index].name = value.replace(/[^a-zA-Z0-9_\s]/g, ''); // alphanumeric + space
+    } else {
+      updated[index].type = value as any;
+    }
+    setEditFields(updated);
+  };
+
+  const handleDeleteDeptInDetails = async () => {
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete this department "${dept?.name}" and all of its records? This action cannot be undone.`);
+    if (!confirmDelete) return;
+
+    setDeletingDept(true);
+    try {
+      const { error } = await supabase!
+        .from('departments')
+        .delete()
+        .eq('id', deptId);
+
+      if (error) {
+        setEditDeptError(error.message);
+      } else {
+        setIsEditDeptModalOpen(false);
+        router.push(`/org/${orgId}`);
+      }
+    } catch (err: any) {
+      setEditDeptError(err?.message || 'Failed to delete department.');
+    } finally {
+      setDeletingDept(false);
+    }
+  };
 
   const handleUpdateDept = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,23 +157,77 @@ export default function DeptDetailPage({ params }: PageProps) {
       setEditDeptError('Please provide a valid name and an expected count greater than 0.');
       return;
     }
+
+    const cleanedFields = editFields.map(f => ({ ...f, name: f.name.trim() }));
+    if (cleanedFields.some(f => !f.name)) {
+      setEditDeptError('All dynamic fields must have a valid name.');
+      return;
+    }
+
+    // Check duplicate names
+    const names = cleanedFields.map(f => f.name.toLowerCase());
+    if (new Set(names).size !== names.length) {
+      setEditDeptError('Field names must be unique.');
+      return;
+    }
+
     setUpdatingDept(true);
     setEditDeptError(null);
     try {
-      const { error } = await supabase!
+      // 1. Update department first
+      const { error: deptError } = await supabase!
         .from('departments')
         .update({
           name: editDeptName.trim(),
-          expected_count: editExpectedCount
+          expected_count: editExpectedCount,
+          fields_schema: cleanedFields
         })
         .eq('id', deptId);
 
-      if (error) {
-        setEditDeptError(error.message);
-      } else {
-        setDept(prev => prev ? { ...prev, name: editDeptName.trim(), expected_count: editExpectedCount } : null);
-        setIsEditDeptModalOpen(false);
+      if (deptError) {
+        setEditDeptError(deptError.message);
+        return;
       }
+
+      // 2. Fetch all records to migrate their JSON data values to match renamed or updated fields
+      if (dept) {
+        const { data: recordsData, error: recordsError } = await supabase!
+          .from('records')
+          .select('*')
+          .eq('dept_id', deptId);
+
+        if (!recordsError && recordsData && recordsData.length > 0) {
+          for (const rec of recordsData) {
+            const updatedRecordData: Record<string, any> = {};
+            
+            cleanedFields.forEach((newField, newIdx) => {
+              // Try to find if a field with the exact same name existed in the old schema
+              const oldFieldExact = dept.fields_schema.find(f => f.name === newField.name);
+              if (oldFieldExact) {
+                updatedRecordData[newField.name] = rec.data[newField.name] !== undefined ? rec.data[newField.name] : '';
+              } else {
+                // If it is a renamed field (same index, different name, and the old name is not present in the new schema)
+                const matchingOldField = dept.fields_schema[newIdx];
+                if (matchingOldField && !cleanedFields.some(f => f.name === matchingOldField.name)) {
+                  updatedRecordData[newField.name] = rec.data[matchingOldField.name] !== undefined ? rec.data[matchingOldField.name] : '';
+                } else {
+                  // Completely new field
+                  updatedRecordData[newField.name] = '';
+                }
+              }
+            });
+
+            // Update record data
+            await supabase!
+              .from('records')
+              .update({ data: updatedRecordData })
+              .eq('id', rec.id);
+          }
+        }
+      }
+
+      await loadPageData();
+      setIsEditDeptModalOpen(false);
     } catch (err: any) {
       setEditDeptError(err?.message || 'Failed to update department details.');
     } finally {
@@ -137,7 +239,7 @@ export default function DeptDetailPage({ params }: PageProps) {
   const supabase = getSupabaseClient();
 
   // Load details
-  const loadPageData = useCallback(async () => {
+  const loadPageData = async () => {
     if (!supabase) return;
     try {
       // Org
@@ -168,13 +270,14 @@ export default function DeptDetailPage({ params }: PageProps) {
     } finally {
       setLoading(false);
     }
-  }, [supabase, orgId, deptId]);
+  };
 
   useEffect(() => {
     setTimeout(() => {
       loadPageData();
     }, 0);
-  }, [loadPageData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, deptId]);
 
   // Compute metrics
   const expectedCount = dept?.expected_count || 0;
@@ -259,6 +362,9 @@ export default function DeptDetailPage({ params }: PageProps) {
     try {
       const form = new FormData();
       form.append('deptId', deptId);
+      if (targetSerialNumber !== null) {
+        form.append('serialNumber', targetSerialNumber.toString());
+      }
       
       // Separate custom Photo file if it is stored in base64 state, or put in data
       let photoFileToSend: File | null = null;
@@ -298,6 +404,7 @@ export default function DeptDetailPage({ params }: PageProps) {
       } else {
         setIsSingleModalOpen(false);
         setEditingRecord(null);
+        setTargetSerialNumber(null);
         setSingleFormData({});
         await loadPageData();
       }
@@ -343,8 +450,9 @@ export default function DeptDetailPage({ params }: PageProps) {
   };
 
   // SheetJS - Download excel template
-  const handleDownloadTemplate = () => {
+  const handleDownloadTemplate = async () => {
     if (!dept) return;
+    const XLSX = await import('xlsx');
     const headers = fieldsSchema.map(f => f.name);
     
     // Add "photo" as standard guide column name if dynamic image exists
@@ -368,8 +476,9 @@ export default function DeptDetailPage({ params }: PageProps) {
     setExcelSuccessMsg(null);
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
+        const XLSX = await import('xlsx');
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
         const wsname = wb.SheetNames[0];
@@ -434,8 +543,9 @@ export default function DeptDetailPage({ params }: PageProps) {
   };
 
   // Export active records directly to Excel
-  const handleExportExcelOnly = () => {
+  const handleExportExcelOnly = async () => {
     if (!dept || !organization) return;
+    const XLSX = await import('xlsx');
     
     // Build headers
     const headers = ['Serial Number', ...fieldsSchema.map(f => f.name), 'Photo Status', 'Photo URL', 'Created At'];
@@ -466,11 +576,35 @@ export default function DeptDetailPage({ params }: PageProps) {
   };
 
   // jsPDF - Generate PDF of Records with highlighted gaps
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     if (!dept || !organization) return;
+    const { jsPDF } = await import('jspdf');
+    const { default: autoTable } = await import('jspdf-autotable');
+
     const doc = new jsPDF() as any;
     
-    doc.setFont('Helvetica');
+    let fontName = 'Helvetica';
+    try {
+      // Fetch Noto Sans Devanagari regular font for Hindi Unicode rendering support
+      const response = await fetch('https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf');
+      if (response.ok) {
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const base64Font = btoa(binary);
+        doc.addFileToVFS('NotoSansDevanagari-Regular.ttf', base64Font);
+        doc.addFont('NotoSansDevanagari-Regular.ttf', 'NotoSansDevanagari', 'normal');
+        fontName = 'NotoSansDevanagari';
+      }
+    } catch (err) {
+      console.warn('Unable to load NotoSansDevanagari font, falling back to Helvetica', err);
+    }
+
+    doc.setFont(fontName);
     doc.setFontSize(16);
     doc.text(`${organization.name} - ${dept.name} Status Report`, 14, 15);
     doc.setFontSize(10);
@@ -499,6 +633,9 @@ export default function DeptDetailPage({ params }: PageProps) {
       startY: 32,
       head: [headers],
       body: tableRows,
+      styles: {
+        font: fontName,
+      },
       didParseCell: (dataCell: any) => {
         const text = dataCell.cell.text[0];
         if (text === 'Not Received') {
@@ -550,6 +687,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                     onClick={() => {
                       setEditDeptName(dept.name);
                       setEditExpectedCount(dept.expected_count);
+                      setEditFields(JSON.parse(JSON.stringify(dept.fields_schema || [])));
                       setEditDeptError(null);
                       setIsEditDeptModalOpen(true);
                     }}
@@ -641,6 +779,7 @@ export default function DeptDetailPage({ params }: PageProps) {
               id="add-single-entry-btn"
               onClick={() => {
                 setEditingRecord(null);
+                setTargetSerialNumber(null);
                 setSingleFormData({});
                 setIsSingleModalOpen(true);
               }}
@@ -730,7 +869,7 @@ export default function DeptDetailPage({ params }: PageProps) {
                           <button
                             onClick={() => {
                               setEditingRecord(null);
-                              // Auto pre-fill serial number for this exact slot
+                              setTargetSerialNumber(serialNum);
                               setSingleFormData({});
                               setIsSingleModalOpen(true);
                             }}
@@ -857,6 +996,29 @@ export default function DeptDetailPage({ params }: PageProps) {
             )}
 
             <form onSubmit={handleSingleSubmit} className="space-y-4">
+              {/* Display / edit of Serial Number */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Serial Number (Row Slot)
+                </label>
+                <input
+                  type="number"
+                  disabled={editingRecord !== null || targetSerialNumber !== null}
+                  value={editingRecord ? editingRecord.serial_number : (targetSerialNumber || '')}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setTargetSerialNumber(isNaN(val) ? null : val);
+                  }}
+                  placeholder="Auto-assigned sequentially"
+                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 bg-slate-50 disabled:opacity-75 sm:text-sm outline-none transition-all font-mono"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  {editingRecord || targetSerialNumber 
+                    ? "Fixed slot number for this card row." 
+                    : "Leave blank to automatically assign the next sequential slot."}
+                </p>
+              </div>
+
               {fieldsSchema.map((field) => (
                 <div key={field.name}>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
@@ -977,7 +1139,12 @@ export default function DeptDetailPage({ params }: PageProps) {
               <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsSingleModalOpen(false)}
+                  onClick={() => {
+                    setIsSingleModalOpen(false);
+                    setEditingRecord(null);
+                    setTargetSerialNumber(null);
+                    setSingleFormError(null);
+                  }}
                   className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
                 >
                   Cancel
@@ -1185,12 +1352,12 @@ export default function DeptDetailPage({ params }: PageProps) {
       {/* Edit Department Modal */}
       {isEditDeptModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in" id="edit-dept-modal">
-          <div className="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up">
+          <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up max-h-[90vh] overflow-y-auto">
             <h3 className="font-display text-xl font-bold text-slate-900 mb-1" id="edit-dept-modal-title">
               Edit Department Details
             </h3>
             <p className="text-sm text-slate-500 mb-6">
-              Update the name and allocated size (expected count) of this department.
+              Update the name, allocated size (expected count), and data fields schema of this department.
             </p>
 
             {editDeptError && (
@@ -1200,58 +1367,135 @@ export default function DeptDetailPage({ params }: PageProps) {
               </div>
             )}
 
-            <form onSubmit={handleUpdateDept} className="space-y-4" id="edit-dept-form">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Department Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Engineering Staff"
-                  value={editDeptName}
-                  onChange={(e) => setEditDeptName(e.target.value)}
-                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
-                />
+            <form onSubmit={handleUpdateDept} className="space-y-6" id="edit-dept-form">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                    Department Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Engineering Staff"
+                    value={editDeptName}
+                    onChange={(e) => setEditDeptName(e.target.value)}
+                    className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                    Expected Count (Allocated Size)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    placeholder="e.g. 150"
+                    value={editExpectedCount || ''}
+                    onChange={(e) => setEditExpectedCount(parseInt(e.target.value) || 0)}
+                    className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                  Expected Count (Allocated Size)
-                </label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  placeholder="e.g. 150"
-                  value={editExpectedCount || ''}
-                  onChange={(e) => setEditExpectedCount(parseInt(e.target.value) || 0)}
-                  className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
-                />
-                <p className="text-xs text-slate-400 mt-1">
-                  Updating this changes the participant matrix slots. Gaps will highlight automatically.
+                <p className="text-xs text-slate-400">
+                  Updating Expected Count changes the participant matrix slots. Gaps will highlight automatically.
                 </p>
               </div>
 
-              <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+              {/* Dynamic Field Builder */}
+              <div className="border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">Fields & Schema Rules</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">Edit, add, or delete metadata fields printed on cards.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddEditField}
+                    className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-500 bg-indigo-50 px-2.5 py-1.5 rounded-lg border border-indigo-100 cursor-pointer"
+                  >
+                    <Plus className="h-3 w-3" /> Add Field
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-56 overflow-y-auto pr-1" id="edit-schema-rows-container">
+                  {editFields.map((field, idx) => (
+                    <div key={idx} className="flex gap-2 items-center animate-fade-in" id={`edit-schema-row-${idx}`}>
+                      <div className="flex-1">
+                        <input
+                           type="text"
+                           required
+                           placeholder="e.g. Employee ID, Designation"
+                           value={field.name}
+                           onChange={(e) => handleEditFieldChange(idx, 'name', e.target.value)}
+                           className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                        />
+                      </div>
+                      <div className="w-32">
+                        <select
+                           value={field.type}
+                           onChange={(e) => handleEditFieldChange(idx, 'type', e.target.value)}
+                           className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                        >
+                           <option value="text">Text</option>
+                           <option value="number">Number</option>
+                           <option value="date">Date</option>
+                           <option value="image">Image</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveEditField(idx)}
+                        disabled={editFields.length <= 1}
+                        className="p-2.5 text-slate-400 hover:text-red-500 bg-slate-50 hover:bg-red-50 border border-slate-200 rounded-xl transition-colors disabled:opacity-40 disabled:hover:bg-slate-50 disabled:hover:text-slate-400 cursor-pointer"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-between gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsEditDeptModalOpen(false)}
-                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                  onClick={handleDeleteDeptInDetails}
+                  disabled={deletingDept || updatingDept}
+                  className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-100 transition-colors cursor-pointer"
+                  id="delete-dept-details-btn"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={updatingDept}
-                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100"
-                >
-                  {updatingDept ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                  {deletingDept ? (
+                    <Loader2 className="h-4 w-4 animate-spin animate-spin-fast" />
                   ) : (
-                    'Save Changes'
+                    <>
+                      <Trash2 className="h-4 w-4" />
+                      Delete Dept
+                    </>
                   )}
                 </button>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditDeptModalOpen(false)}
+                    className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={updatingDept}
+                    className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100 cursor-pointer"
+                  >
+                    {updatingDept ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Save Changes'
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

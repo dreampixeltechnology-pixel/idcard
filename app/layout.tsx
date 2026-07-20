@@ -19,8 +19,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'SaaS ID Card Generator',
-  description: 'Production-ready SaaS platform for ID Card design, dynamic records, and high-quality exporting.',
+  title: 'Dreampixel ID Cards - SaaS Generator',
+  description: 'Production-ready SaaS platform by Dreampixel Technology for ID Card design, dynamic records, and high-quality exporting.',
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {

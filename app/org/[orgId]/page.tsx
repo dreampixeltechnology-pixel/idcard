@@ -18,7 +18,8 @@ import {
   Image as ImageIcon,
   ChevronRight,
   Info,
-  Edit3
+  Edit3,
+  Copy
 } from 'lucide-react';
 
 interface Department {
@@ -62,6 +63,7 @@ export default function OrgDetailPage({ params }: PageProps) {
   const [isEditOrgModalOpen, setIsEditOrgModalOpen] = useState(false);
   const [editOrgName, setEditOrgName] = useState('');
   const [updatingOrg, setUpdatingOrg] = useState(false);
+  const [deletingOrg, setDeletingOrg] = useState(false);
 
   const handleUpdateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,6 +90,60 @@ export default function OrgDetailPage({ params }: PageProps) {
     } finally {
       setUpdatingOrg(false);
     }
+  };
+
+  const handleDeleteOrg = async () => {
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete organization "${organization?.name}"? This will delete all its departments and records. This action cannot be undone.`);
+    if (!confirmDelete) return;
+
+    setDeletingOrg(true);
+    setFormError(null);
+    try {
+      const { error } = await supabase!
+        .from('organizations')
+        .delete()
+        .eq('id', orgId);
+
+      if (error) {
+        setFormError(error.message);
+      } else {
+        setIsEditOrgModalOpen(false);
+        router.push('/dashboard');
+      }
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to delete organization.');
+    } finally {
+      setDeletingOrg(false);
+    }
+  };
+
+  const handleDeleteDept = async (deptId: string, deptName: string) => {
+    const confirmDelete = window.confirm(`Are you sure you want to permanently delete department "${deptName}" and all of its records? This action cannot be undone.`);
+    if (!confirmDelete) return;
+
+    try {
+      const { error } = await supabase!
+        .from('departments')
+        .delete()
+        .eq('id', deptId);
+
+      if (error) {
+        alert(`Error deleting department: ${error.message}`);
+      } else {
+        setDepartments(prev => prev.filter(d => d.id !== deptId));
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete department.');
+    }
+  };
+
+  const handleDuplicateDept = (dept: Department) => {
+    setDeptName(`${dept.name} Copy`);
+    setDeptCode(`${dept.code}C`);
+    setExpectedCount(dept.expected_count);
+    setFields(JSON.parse(JSON.stringify(dept.fields_schema || [])));
+    setFormError(null);
+    setIsModalOpen(true);
   };
 
   const router = useRouter();
@@ -336,9 +392,33 @@ export default function OrgDetailPage({ params }: PageProps) {
                     <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 uppercase tracking-wider font-mono">
                       Code: {dept.code}
                     </span>
-                    <span className="text-xs font-medium text-slate-400">
-                      Expected: {dept.expected_count}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-medium text-slate-400">
+                        Expected: {dept.expected_count}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDuplicateDept(dept);
+                        }}
+                        className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                        title="Duplicate Department Schema"
+                        id={`duplicate-dept-btn-${dept.id}`}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteDept(dept.id, dept.name);
+                        }}
+                        className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                        title="Delete Department"
+                        id={`delete-dept-btn-${dept.id}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <h3 className="font-display text-xl font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
                     {dept.name}
@@ -565,25 +645,43 @@ export default function OrgDetailPage({ params }: PageProps) {
                 />
               </div>
 
-              <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <div className="mt-6 flex justify-between gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsEditOrgModalOpen(false)}
-                  className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                  onClick={handleDeleteOrg}
+                  disabled={deletingOrg || updatingOrg}
+                  className="flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-100 transition-colors cursor-pointer"
+                  id="delete-org-btn"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={updatingOrg}
-                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100"
-                >
-                  {updatingOrg ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                  {deletingOrg ? (
+                    <Loader2 className="h-4 w-4 animate-spin animate-spin-fast" />
                   ) : (
-                    'Save Changes'
+                    <>
+                      <Trash2 className="h-4 w-4" />
+                      Delete Org
+                    </>
                   )}
                 </button>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditOrgModalOpen(false)}
+                    className="rounded-xl px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={updatingOrg}
+                    className="flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 transition-colors shadow-md shadow-indigo-100 cursor-pointer"
+                  >
+                    {updatingOrg ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      'Save Changes'
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

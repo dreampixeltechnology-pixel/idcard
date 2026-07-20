@@ -2,24 +2,40 @@ import satori from 'satori';
 import { Resvg } from '@resvg/resvg-js';
 import React from 'react';
 
-let fontBuffer: ArrayBuffer | null = null;
+let interFontBuffer: ArrayBuffer | null = null;
+let devanagariFontBuffer: ArrayBuffer | null = null;
 
-// Caches the font in memory to keep rendering fast and prevent duplicate network calls
-async function getFontData() {
-  if (!fontBuffer) {
+// Caches the fonts in memory to keep rendering fast and prevent duplicate network calls
+async function getInterFont() {
+  if (!interFontBuffer) {
     try {
       const response = await fetch('https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter-Regular.ttf');
       if (!response.ok) {
-        throw new Error('Failed to fetch font from Google Fonts.');
+        throw new Error('Failed to fetch Inter font.');
       }
-      fontBuffer = await response.arrayBuffer();
+      interFontBuffer = await response.arrayBuffer();
     } catch (err) {
-      console.error('Error fetching font, using local mock fallback:', err);
-      // If fetching fails, we'll let it reject so the caller can fallback
+      console.error('Error fetching Inter font:', err);
       throw err;
     }
   }
-  return fontBuffer;
+  return interFontBuffer;
+}
+
+async function getDevanagariFont() {
+  if (!devanagariFontBuffer) {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf');
+      if (!response.ok) {
+        throw new Error('Failed to fetch Noto Sans Devanagari font.');
+      }
+      devanagariFontBuffer = await response.arrayBuffer();
+    } catch (err) {
+      console.error('Error fetching Noto Sans Devanagari font:', err);
+      throw err;
+    }
+  }
+  return devanagariFontBuffer;
 }
 
 interface CardFieldConfig {
@@ -48,7 +64,13 @@ export async function generateCardPng(
   fieldsConfig: CardFieldConfig[],
   record: RecordData
 ): Promise<Buffer> {
-  const fontData = await getFontData();
+  const interFont = await getInterFont();
+  let devanagariFont: ArrayBuffer | null = null;
+  try {
+    devanagariFont = await getDevanagariFont();
+  } catch (err) {
+    console.warn('Could not load Devanagari font for Satori, falling back to Inter only.', err);
+  }
 
   // PVC Card size at 300dpi is 1012 x 638
   const width = orientation === 'horizontal' ? 1012 : 638;
@@ -68,7 +90,7 @@ export async function generateCardPng(
         backgroundSize: '100% 100%',
         backgroundRepeat: 'no-repeat',
         position: 'relative',
-        fontFamily: 'Inter',
+        fontFamily: 'Inter, NotoSansDevanagari',
         boxSizing: 'border-box',
         overflow: 'hidden',
       },
@@ -120,7 +142,7 @@ export async function generateCardPng(
             textAlign: field.align || 'left',
             display: 'flex',
             alignItems: 'center',
-            fontFamily: 'Inter',
+            fontFamily: 'Inter, NotoSansDevanagari',
             whiteSpace: 'nowrap',
           },
         },
@@ -129,18 +151,29 @@ export async function generateCardPng(
     })
   );
 
+  const satoriFonts: any[] = [
+    {
+      name: 'Inter',
+      data: interFont,
+      weight: 400,
+      style: 'normal',
+    },
+  ];
+
+  if (devanagariFont) {
+    satoriFonts.push({
+      name: 'NotoSansDevanagari',
+      data: devanagariFont,
+      weight: 400,
+      style: 'normal',
+    });
+  }
+
   // Render SVG using Satori
   const svg = await satori(cardJsx, {
     width,
     height,
-    fonts: [
-      {
-        name: 'Inter',
-        data: fontData,
-        weight: 400,
-        style: 'normal',
-      },
-    ],
+    fonts: satoriFonts,
   });
 
   // Render PNG using Resvg
