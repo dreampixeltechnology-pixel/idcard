@@ -417,6 +417,54 @@ export default function DeptDetailPage({ params }: PageProps) {
     setSingleSubmitting(true);
 
     try {
+      // 1. Validate Serial Number if provided
+      if (!editingRecord && targetSerialNumber !== null) {
+        if (targetSerialNumber < 1 || targetSerialNumber > expectedCount) {
+          throw new Error(`Serial Number must be between 1 and ${expectedCount}.`);
+        }
+        const exists = records.some(r => r.serial_number === targetSerialNumber);
+        if (exists) {
+          throw new Error(`Serial Number ${targetSerialNumber} is already taken.`);
+        }
+      }
+
+      // 2. Validate custom fields from schema
+      for (const field of fieldsSchema) {
+        const val = singleFormData[field.name];
+
+        // Required check for non-image fields
+        if (field.type !== 'image') {
+          if (val === undefined || val === null || (typeof val === 'string' && val.trim() === '')) {
+            throw new Error(`"${field.name}" is a required field and cannot be empty.`);
+          }
+        }
+
+        // Phone format regex validation
+        const isPhoneField = field.name.toLowerCase().includes('phone') || 
+                             field.name.toLowerCase().includes('mobile') || 
+                             field.name.toLowerCase().includes('contact') || 
+                             field.name.toLowerCase().includes('tel');
+        if (isPhoneField && val) {
+          const cleanedPhone = String(val).replace(/[\s-()]/g, '');
+          const phoneRegex = /^\+?[0-9]{10,12}$/;
+          if (!phoneRegex.test(cleanedPhone)) {
+            throw new Error(`"${field.name}" must be a valid phone number (10 to 12 digits, e.g. 9876543210 or +919876543210).`);
+          }
+        }
+
+        // Date validity check
+        if (field.type === 'date' && val) {
+          const dateObj = new Date(val);
+          if (isNaN(dateObj.getTime())) {
+            throw new Error(`"${field.name}" must be a valid calendar date.`);
+          }
+          const year = dateObj.getFullYear();
+          if (year < 1900 || year > 2100) {
+            throw new Error(`"${field.name}" must have a valid year between 1900 and 2100.`);
+          }
+        }
+      }
+
       const form = new FormData();
       form.append('deptId', deptId);
       if (targetSerialNumber !== null) {
