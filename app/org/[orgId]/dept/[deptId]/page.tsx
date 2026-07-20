@@ -144,6 +144,7 @@ export default function DeptDetailPage({ params }: PageProps) {
 
   // ZIP Export States
   const [isZipExporting, setIsZipExporting] = useState(false);
+  const [isPhotosZipExporting, setIsPhotosZipExporting] = useState(false);
 
   // Bulk Edit States
   const [selectedRecordIds, setSelectedRecordIds] = useState<string[]>([]);
@@ -718,7 +719,7 @@ export default function DeptDetailPage({ params }: PageProps) {
       });
       
       rowData['Photo Status'] = r.photo_uploaded ? 'Uploaded' : 'Missing';
-      rowData['Photo URL'] = r.photo_url || 'N/A';
+      rowData['Photo URL'] = r.photo_uploaded ? `${r.serial_number}.jpg` : 'N/A';
       rowData['Created At'] = new Date(r.created_at).toLocaleDateString();
       
       return rowData;
@@ -928,6 +929,33 @@ export default function DeptDetailPage({ params }: PageProps) {
     }
   };
 
+  // Export all raw photos as ZIP
+  const handleExportPhotosZip = async () => {
+    if (!dept || !organization) return;
+    setIsPhotosZipExporting(true);
+    try {
+      const response = await fetch(`/api/records/export-photos/${deptId}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to generate Photos ZIP.');
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${organization.code.toUpperCase()}-${dept.code.toUpperCase()}-photos.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err.message || 'Error downloading Photos ZIP archive.');
+    } finally {
+      setIsPhotosZipExporting(false);
+    }
+  };
+
   // Submit bulk edit changes
   const handleBulkEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1070,16 +1098,16 @@ export default function DeptDetailPage({ params }: PageProps) {
 
             <button
               id="zip-export-btn"
-              onClick={handleExportZip}
-              disabled={isZipExporting}
+              onClick={handleExportPhotosZip}
+              disabled={isPhotosZipExporting}
               className="flex items-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-colors disabled:opacity-50"
             >
-              {isZipExporting ? (
+              {isPhotosZipExporting ? (
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
               ) : (
                 <FileArchive className="h-4 w-4 text-indigo-600" />
               )}
-              <span>Export Cards (ZIP)</span>
+              <span>Export Photos (ZIP)</span>
             </button>
 
             <button

@@ -92,6 +92,14 @@ const SCHOOL_PRESETS: PresetSpec[] = [
   { id: 's10', name: 'SciTech Neon (Dark)', layoutNum: 10, primary: '#22C55E', secondary: '#111827', accent: '#06B6D4', bg: '#030712' }
 ];
 
+const CUSTOM_PRESETS: PresetSpec[] = [
+  { id: 'u1', name: 'Premium Slate', layoutNum: 1, primary: '#1E293B', secondary: '#0F172A', accent: '#F59E0B', bg: '#F8FAFC' },
+  { id: 'u2', name: 'Sunset Silk', layoutNum: 6, primary: '#EA580C', secondary: '#7C2D12', accent: '#FCD34D', bg: '#FFF7ED' },
+  { id: 'u3', name: 'Ocean Mist', layoutNum: 6, primary: '#0284C7', secondary: '#0C4A6E', accent: '#38BDF8', bg: '#F0F9FF' },
+  { id: 'u4', name: 'Charcoal Minimal', layoutNum: 5, primary: '#27272A', secondary: '#09090B', accent: '#E4E4E7', bg: '#FAFAFA' },
+  { id: 'u5', name: 'Neon Cyber', layoutNum: 10, primary: '#D946EF', secondary: '#1E1B4B', accent: '#06B6D4', bg: '#03001C' }
+];
+
 function generateSvgBackground(layoutNum: number, orientation: 'horizontal' | 'vertical', primary: string, secondary: string, accent: string, bg: string) {
   const w = orientation === 'horizontal' ? 560 : 353;
   const h = orientation === 'horizontal' ? 353 : 560;
@@ -233,6 +241,7 @@ export default function CardDesignerPage({ params }: PageProps) {
 
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [dept, setDept] = useState<Department | null>(null);
+  const [firstRecord, setFirstRecord] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -243,7 +252,7 @@ export default function CardDesignerPage({ params }: PageProps) {
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null);
   const [fieldsConfig, setFieldsConfig] = useState<FieldConfig[]>([]);
   const [selectedFieldIndex, setSelectedFieldIndex] = useState<number | null>(null);
-  const [activePresetTab, setActivePresetTab] = useState<'corporate' | 'school'>('corporate');
+  const [activePresetTab, setActivePresetTab] = useState<'corporate' | 'school' | 'custom'>('corporate');
   
   const canvasRef = useRef<HTMLDivElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
@@ -280,6 +289,17 @@ export default function CardDesignerPage({ params }: PageProps) {
           .eq('id', deptId)
           .single();
         setDept(deptData);
+
+        // Fetch First Record of Department
+        const { data: recs } = await supabase!
+          .from('records')
+          .select('*')
+          .eq('dept_id', deptId)
+          .order('serial_number', { ascending: true })
+          .limit(1);
+        if (recs && recs.length > 0) {
+          setFirstRecord(recs[0]);
+        }
 
         // Fetch Existing Card Design
         const res = await fetch(`/api/card-design/${deptId}`);
@@ -633,6 +653,22 @@ export default function CardDesignerPage({ params }: PageProps) {
     'Employee ID': 'EMP-2026-98'
   };
 
+  const getPreviewText = (fieldName: string) => {
+    if (firstRecord) {
+      if (fieldName === 'Serial Number') {
+        return `#${firstRecord.serial_number}`;
+      }
+      const dbValue = firstRecord.data[fieldName];
+      if (dbValue !== undefined && dbValue !== null && dbValue !== '') {
+        return String(dbValue);
+      }
+    }
+    // Fallback to dummy data
+    if (fieldName === 'Serial Number') return '#001';
+    if (fieldName === 'Department') return dept?.name || 'Operations';
+    return dummyData[fieldName] || `{{${fieldName}}}`;
+  };
+
   if (loading) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-slate-50">
@@ -731,27 +767,45 @@ export default function CardDesignerPage({ params }: PageProps) {
             <div className="border-t border-slate-100 pt-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5 uppercase tracking-wider">
-                  <Sparkles className="h-4 w-4 text-indigo-500 animate-pulse" /> Presets ({activePresetTab === 'corporate' ? CORPORATE_PRESETS.length : SCHOOL_PRESETS.length})
+                  <Sparkles className="h-4 w-4 text-indigo-500 animate-pulse" /> Presets ({
+                    activePresetTab === 'corporate' 
+                      ? CORPORATE_PRESETS.length 
+                      : activePresetTab === 'school' 
+                        ? SCHOOL_PRESETS.length 
+                        : CUSTOM_PRESETS.length
+                  })
                 </h3>
                 <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                   <button
                     onClick={() => setActivePresetTab('corporate')}
                     className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all cursor-pointer ${activePresetTab === 'corporate' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
                   >
-                    Corporate
+                    Corp
                   </button>
                   <button
                     onClick={() => setActivePresetTab('school')}
                     className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all cursor-pointer ${activePresetTab === 'school' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
                   >
-                    School ID
+                    School
+                  </button>
+                  <button
+                    onClick={() => setActivePresetTab('custom')}
+                    className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all cursor-pointer ${activePresetTab === 'custom' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+                  >
+                    Custom
                   </button>
                 </div>
               </div>
 
               {/* Grid list of presets */}
               <div className="grid grid-cols-2 gap-2 max-h-[200px] overflow-y-auto pr-1 border border-slate-100 p-2 rounded-xl bg-slate-50/50">
-                {(activePresetTab === 'corporate' ? CORPORATE_PRESETS : SCHOOL_PRESETS).map((preset) => (
+                {(
+                  activePresetTab === 'corporate' 
+                    ? CORPORATE_PRESETS 
+                    : activePresetTab === 'school' 
+                      ? SCHOOL_PRESETS 
+                      : CUSTOM_PRESETS
+                ).map((preset) => (
                   <div
                     key={preset.id}
                     className="group border border-slate-200 bg-white hover:border-indigo-300 rounded-xl p-2.5 transition-all text-left relative flex flex-col justify-between"
@@ -815,7 +869,71 @@ export default function CardDesignerPage({ params }: PageProps) {
               <div className="border-t border-slate-100 pt-4 space-y-4 animate-fade-in" id="property-inspector">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Styling: {selectedField.field}</h3>
-                  <span className="text-[11px] bg-slate-100 px-2 py-0.5 rounded-md text-slate-500 font-mono">X:{selectedField.x}% Y:{selectedField.y}%</span>
+                  <span className="text-[11px] bg-indigo-100 px-2.5 py-0.5 rounded-md text-indigo-700 font-mono font-bold">X:{selectedField.x}% Y:{selectedField.y}%</span>
+                </div>
+
+                {/* Precise Position Tuning */}
+                <div className="bg-indigo-50/40 border border-indigo-100/50 rounded-2xl p-3.5 space-y-3 shadow-inner">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700 block">Fine Position Controls</span>
+                  <div className="grid grid-cols-2 gap-3.5">
+                    {/* X Coordinate */}
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-400 uppercase mb-1">X Position (%)</label>
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateProperty('x', Math.max(0, selectedField.x - 1))}
+                          className="h-8 w-8 flex items-center justify-center bg-slate-50 hover:bg-slate-100 active:scale-95 text-slate-700 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={selectedField.x}
+                          onChange={(e) => handleUpdateProperty('x', Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                          className="w-full text-center text-xs font-mono font-bold outline-none border-none text-slate-800"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateProperty('x', Math.min(100, selectedField.x + 1))}
+                          className="h-8 w-8 flex items-center justify-center bg-slate-50 hover:bg-slate-100 active:scale-95 text-slate-700 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Y Coordinate */}
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-400 uppercase mb-1">Y Position (%)</label>
+                      <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateProperty('y', Math.max(0, selectedField.y - 1))}
+                          className="h-8 w-8 flex items-center justify-center bg-slate-50 hover:bg-slate-100 active:scale-95 text-slate-700 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          value={selectedField.y}
+                          onChange={(e) => handleUpdateProperty('y', Math.max(0, Math.min(100, parseInt(e.target.value) || 0)))}
+                          className="w-full text-center text-xs font-mono font-bold outline-none border-none text-slate-800"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateProperty('y', Math.min(100, selectedField.y + 1))}
+                          className="h-8 w-8 flex items-center justify-center bg-slate-50 hover:bg-slate-100 active:scale-95 text-slate-700 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {selectedField.type === 'text' ? (
@@ -824,19 +942,35 @@ export default function CardDesignerPage({ params }: PageProps) {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-400 uppercase mb-1">Font Size (pt)</label>
-                        <input
-                          type="number"
-                          min="6"
-                          max="40"
-                          value={selectedField.fontSize}
-                          onChange={(e) => handleUpdateProperty('fontSize', parseInt(e.target.value) || 12)}
-                          className="block w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-xs font-mono outline-none"
-                        />
+                        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('fontSize', Math.max(6, selectedField.fontSize - 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="6"
+                            max="40"
+                            value={selectedField.fontSize}
+                            onChange={(e) => handleUpdateProperty('fontSize', Math.max(6, Math.min(40, parseInt(e.target.value) || 12)))}
+                            className="w-full text-center text-xs font-mono font-bold outline-none border-none text-slate-800"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('fontSize', Math.min(40, selectedField.fontSize + 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                       
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-400 uppercase mb-1">Font Color</label>
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 h-10">
                           <input
                             type="color"
                             value={selectedField.color}
@@ -859,13 +993,13 @@ export default function CardDesignerPage({ params }: PageProps) {
                       <div className="flex gap-1.5">
                         <button
                           onClick={() => handleUpdateProperty('bold', !selectedField.bold)}
-                          className={`p-2 rounded-lg border transition-all ${selectedField.bold ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-slate-200 hover:bg-slate-50'}`}
+                          className={`p-2 rounded-lg border transition-all cursor-pointer ${selectedField.bold ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-slate-200 hover:bg-slate-50'}`}
                         >
                           <Bold className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleUpdateProperty('italic', !selectedField.italic)}
-                          className={`p-2 rounded-lg border transition-all ${selectedField.italic ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-slate-200 hover:bg-slate-50'}`}
+                          className={`p-2 rounded-lg border transition-all cursor-pointer ${selectedField.italic ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-slate-200 hover:bg-slate-50'}`}
                         >
                           <Italic className="h-4 w-4" />
                         </button>
@@ -880,7 +1014,7 @@ export default function CardDesignerPage({ params }: PageProps) {
                           <button
                             key={align}
                             onClick={() => handleUpdateProperty('align', align)}
-                            className={`flex justify-center py-1.5 rounded-lg text-xs capitalize font-semibold transition-all ${
+                            className={`flex justify-center py-1.5 rounded-lg text-xs capitalize font-semibold transition-all cursor-pointer ${
                               selectedField.align === align ? 'bg-white shadow-sm text-indigo-600 font-bold' : 'text-slate-500 hover:bg-white/50'
                             }`}
                           >
@@ -898,25 +1032,57 @@ export default function CardDesignerPage({ params }: PageProps) {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-400 uppercase mb-1">Image Width (%)</label>
-                        <input
-                          type="number"
-                          min="10"
-                          max="90"
-                          value={selectedField.width || 20}
-                          onChange={(e) => handleUpdateProperty('width', parseInt(e.target.value) || 20)}
-                          className="block w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-xs font-mono outline-none"
-                        />
+                        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('width', Math.max(10, (selectedField.width || 20) - 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="10"
+                            max="90"
+                            value={selectedField.width || 20}
+                            onChange={(e) => handleUpdateProperty('width', Math.max(10, Math.min(90, parseInt(e.target.value) || 20)))}
+                            className="w-full text-center text-xs font-mono font-bold outline-none border-none text-slate-800"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('width', Math.min(90, (selectedField.width || 20) + 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                       <div>
                         <label className="block text-[11px] font-semibold text-slate-400 uppercase mb-1">Image Height (%)</label>
-                        <input
-                          type="number"
-                          min="10"
-                          max="90"
-                          value={selectedField.height || 20}
-                          onChange={(e) => handleUpdateProperty('height', parseInt(e.target.value) || 20)}
-                          className="block w-full rounded-xl border border-slate-200 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-xs font-mono outline-none"
-                        />
+                        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('height', Math.max(10, (selectedField.height || 20) - 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="10"
+                            max="90"
+                            value={selectedField.height || 20}
+                            onChange={(e) => handleUpdateProperty('height', Math.max(10, Math.min(90, parseInt(e.target.value) || 20)))}
+                            className="w-full text-center text-xs font-mono font-bold outline-none border-none text-slate-800"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateProperty('height', Math.min(90, (selectedField.height || 20) + 1))}
+                            className="h-8 w-8 flex items-center justify-center bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 rounded-lg text-xs font-bold transition-all shrink-0 cursor-pointer"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </>
@@ -985,6 +1151,9 @@ export default function CardDesignerPage({ params }: PageProps) {
                 const widthPx = (widthPercent / 100) * displayWidth;
                 const heightPx = (heightPercent / 100) * displayHeight;
 
+                // Check if we have an uploaded photo in first entry
+                const actualPhotoUrl = firstRecord?.photo_url || null;
+
                 return (
                   <Draggable
                     key={index}
@@ -1006,8 +1175,18 @@ export default function CardDesignerPage({ params }: PageProps) {
                         boxSizing: 'border-box'
                       }}
                     >
-                      <ImageIcon className="h-6 w-6 text-indigo-500" />
-                      <span className="text-[9px] text-indigo-600 font-bold mt-1 uppercase tracking-wider">{field.field}</span>
+                      {actualPhotoUrl ? (
+                        <img 
+                          src={actualPhotoUrl} 
+                          alt="First Record Portrait" 
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <>
+                          <ImageIcon className="h-6 w-6 text-indigo-500" />
+                          <span className="text-[9px] text-indigo-600 font-bold mt-1 uppercase tracking-wider">{field.field}</span>
+                        </>
+                      )}
                     </div>
                   </Draggable>
                 );
@@ -1015,7 +1194,7 @@ export default function CardDesignerPage({ params }: PageProps) {
 
               // Text Field Layout
               // Resolve mock or label text to preview
-              const mockText = dummyData[field.field] || `{{${field.field}}}`;
+              const mockText = getPreviewText(field.field);
 
               return (
                 <Draggable
