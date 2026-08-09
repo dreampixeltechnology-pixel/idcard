@@ -135,11 +135,13 @@ export default function DashboardPage() {
 
   // Handle auto-code generation
   const handleNameChange = (val: string) => {
-    setOrgName(val);
-    if (!orgCode || orgCode === orgName.split(' ').map(w => w[0]).join('').toUpperCase()) {
-      const generated = val
+    const safeVal = val || '';
+    setOrgName(safeVal);
+    const safeOrgName = orgName || '';
+    if (!orgCode || orgCode === safeOrgName.split(' ').map(w => (w ? w[0] : '')).join('').toUpperCase()) {
+      const generated = safeVal
         .split(' ')
-        .map(w => w[0])
+        .map(w => (w ? w[0] : ''))
         .join('')
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, '');

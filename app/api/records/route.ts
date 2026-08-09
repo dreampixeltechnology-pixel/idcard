@@ -1,6 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
 
+// Helper to scrub base64 image strings from JSON data
+function cleanDataJson(dataObj: Record<string, any>): Record<string, any> {
+  if (!dataObj || typeof dataObj !== 'object') return {};
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(dataObj)) {
+    // Drop base64 data strings or excessively long base64 blobs
+    if (typeof value === 'string' && (value.startsWith('data:image/') || value.length > 2000)) {
+      continue;
+    }
+    // Drop 'photo' or 'image' key if value is base64 string
+    if ((key.toLowerCase() === 'photo' || key.toLowerCase() === 'image') && typeof value === 'string' && value.startsWith('data:image/')) {
+      continue;
+    }
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
 // POST: Add single record (creates next serial, uploads photo, saves details)
 export async function POST(req: NextRequest) {
   try {
@@ -13,7 +31,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'deptId and data JSON are required.' }, { status: 400 });
     }
 
-    const data = JSON.parse(dataStr);
+    const data = cleanDataJson(JSON.parse(dataStr));
     const supabaseAdmin = getSupabaseAdmin();
 
     // 1. Fetch organization and department codes for the storage path
@@ -148,7 +166,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'recordId and data JSON are required.' }, { status: 400 });
     }
 
-    const data = JSON.parse(dataStr);
+    const data = cleanDataJson(JSON.parse(dataStr));
     const supabaseAdmin = getSupabaseAdmin();
 
     // 1. Fetch current record to get serial and deptId

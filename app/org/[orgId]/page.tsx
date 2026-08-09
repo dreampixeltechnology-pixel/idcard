@@ -28,7 +28,7 @@ interface Department {
   name: string;
   code: string;
   expected_count: number;
-  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>;
+  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' }>;
   created_at: string;
 }
 
@@ -58,7 +58,7 @@ export default function OrgDetailPage({ params }: PageProps) {
   const [deptName, setDeptName] = useState('');
   const [deptCode, setDeptCode] = useState('');
   const [expectedCount, setExpectedCount] = useState<number>(0);
-  const [fields, setFields] = useState<Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>>([
+  const [fields, setFields] = useState<Array<{ name: string; type: 'text' | 'number' | 'date' }>>([
     { name: '', type: 'text' }
   ]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -504,7 +504,6 @@ export default function OrgDetailPage({ params }: PageProps) {
                         {f.type === 'text' && <ListTodo className="h-3 w-3" />}
                         {f.type === 'date' && <CalendarDays className="h-3 w-3" />}
                         {f.type === 'number' && <Hash className="h-3 w-3" />}
-                        {f.type === 'image' && <ImageIcon className="h-3 w-3" />}
                         {f.name}
                       </span>
                     ))}
@@ -638,7 +637,6 @@ export default function OrgDetailPage({ params }: PageProps) {
                           <option value="text">Text</option>
                           <option value="number">Number</option>
                           <option value="date">Date</option>
-                          <option value="image">Image</option>
                         </select>
                       </div>
                       <button
@@ -656,7 +654,7 @@ export default function OrgDetailPage({ params }: PageProps) {
 
               <div className="flex gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-xl p-3">
                 <Info className="h-4 w-4 text-indigo-500 shrink-0 mt-0.5" />
-                <span>We suggest defining at least one field named <strong>Full Name</strong> or <strong>Name</strong> and one field of type <strong>Image</strong> to serve as the user avatar.</span>
+                <span>We suggest defining fields like <strong>Name</strong>, <strong>Father Name</strong>, <strong>DOB</strong>, or <strong>Designation</strong>. Photo upload and camera capture are handled automatically for every card record.</span>
               </div>
 
               {/* Actions Footer */}

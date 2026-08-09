@@ -1,6 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
 
+function cleanRowData(row: Record<string, any>): Record<string, any> {
+  if (!row || typeof row !== 'object') return {};
+  const cleaned: Record<string, any> = {};
+  for (const [key, val] of Object.entries(row)) {
+    if (typeof val === 'string' && (val.startsWith('data:image/') || val.length > 2000)) {
+      continue;
+    }
+    if ((key.toLowerCase() === 'photo' || key.toLowerCase() === 'image') && typeof val === 'string' && val.startsWith('data:image/')) {
+      continue;
+    }
+    cleaned[key] = val;
+  }
+  return cleaned;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { deptId, rows } = await req.json();
@@ -32,7 +47,7 @@ export async function POST(req: NextRequest) {
     const inserts = rows.map((row, index) => ({
       dept_id: deptId,
       serial_number: nextSerial + index,
-      data: row,
+      data: cleanRowData(row),
       photo_url: null,
       photo_uploaded: false,
     }));

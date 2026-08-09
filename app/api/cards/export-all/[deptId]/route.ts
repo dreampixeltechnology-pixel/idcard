@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
-import { generateCardPng } from '@/lib/card-renderer';
+import { generateCardPng, generateA4SheetPdf } from '@/lib/card-renderer';
 import * as archiver from 'archiver';
 import * as XLSX from 'xlsx';
 
@@ -12,6 +12,8 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const resolvedParams = await params;
     const deptId = resolvedParams.deptId;
+    const searchParams = req.nextUrl.searchParams;
+    const isPdfOnly = searchParams.get('format') === 'pdf' || searchParams.get('type') === 'pdf';
 
     if (!deptId) {
       return NextResponse.json({ error: 'Department ID is required.' }, { status: 400 });
@@ -52,7 +54,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'No card design has been saved for this department yet. Please configure the Card Designer first.' }, { status: 400 });
     }
 
-    // 4. Fetch all records (usually with photos, but we can export all, with placeholder or missing photo)
+    // 4. Fetch all records
     const { data: records, error: recordsError } = await supabaseAdmin
       .from('records')
       .select('*')
@@ -66,15 +68,59 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     const orgCode = org.code.toUpperCase();
     const deptCode = dept.code.toUpperCase();
 
-    // 5. Build XLSX workbook using SheetJS
+    // 5. Generate card PNGs concurrently
+    const cardRenderPromises = records.map(async (record) => {
+      try {
+        const pngBuffer = await generateCardPng(
+          design.orientation as 'horizontal' | 'vertical',
+          design.background_url,
+          design.fields_config,
+          record
+        );
+        return {
+          filename: `${orgCode}-${deptCode}-${record.serial_number}`,
+          serial_number: record.serial_number,
+          buffer: pngBuffer,
+          success: true
+        };
+      } catch (err) {
+        console.error(`Failed to render card for Serial #${record.serial_number}:`, err);
+        return {
+          filename: `${orgCode}-${deptCode}-${record.serial_number}`,
+          serial_number: record.serial_number,
+          buffer: null,
+          success: false
+        };
+      }
+    });
+
+    const renderedCards = await Promise.all(cardRenderPromises);
+    const validCards = renderedCards.filter(c => c.success && c.buffer) as Array<{ filename: string; serial_number: number; buffer: Buffer; success: true }>;
+
+    // If PDF sheet format requested directly
+    if (isPdfOnly) {
+      const pdfSheetBuffer = await generateA4SheetPdf(
+        design.orientation as 'horizontal' | 'vertical',
+        validCards.map(c => ({ pngBuffer: c.buffer, serial_number: c.serial_number }))
+      );
+
+      return new NextResponse(new Uint8Array(pdfSheetBuffer), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${orgCode}-${deptCode}-all-cards-sheet.pdf"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
+
+    // 6. Build XLSX workbook using SheetJS
     const wb = XLSX.utils.book_new();
     const excelRows = records.map((r) => {
       const rowData: Record<string, any> = {
         'Serial Number': r.serial_number,
       };
       
-      // Inject schema fields
-      const fields = dept.fields_schema as Array<{ name: string; type: string }>;
+      const fields = (dept.fields_schema || []) as Array<{ name: string; type: string }>;
       fields.forEach((f) => {
         let val = r.data[f.name] || '';
         if (f.type === 'date' && val) {
@@ -97,32 +143,11 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     XLSX.utils.book_append_sheet(wb, ws, 'Records Metadata');
     const excelBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
-    // 6. Generate card PNGs concurrently (with a concurrency limit of 10 or just basic map)
-    // To protect memory limit in server, we do them with a neat Promise.all
-    const cardRenderPromises = records.map(async (record) => {
-      try {
-        const pngBuffer = await generateCardPng(
-          design.orientation as 'horizontal' | 'vertical',
-          design.background_url,
-          design.fields_config,
-          record
-        );
-        return {
-          filename: `${orgCode}-${deptCode}-${record.serial_number}`,
-          buffer: pngBuffer,
-          success: true
-        };
-      } catch (err) {
-        console.error(`Failed to render card for Serial #${record.serial_number}:`, err);
-        return {
-          filename: `${orgCode}-${deptCode}-${record.serial_number}`,
-          buffer: null,
-          success: false
-        };
-      }
-    });
-
-    const renderedCards = await Promise.all(cardRenderPromises);
+    // Generate A4 PDF Sheet to include in the ZIP as well!
+    const pdfSheetBuffer = await generateA4SheetPdf(
+      design.orientation as 'horizontal' | 'vertical',
+      validCards.map(c => ({ pngBuffer: c.buffer, serial_number: c.serial_number }))
+    );
 
     // 7. Compress into a ZIP in memory using archiver
     const chunks: any[] = [];
@@ -134,13 +159,11 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       archive.on('error', (err: any) => reject(err));
     });
 
-    // Pipe archive events
     archive.append(excelBuffer, { name: `${orgCode}-${deptCode}-records.xlsx` });
+    archive.append(pdfSheetBuffer, { name: `${orgCode}-${deptCode}-all-cards-sheet.pdf` });
 
-    renderedCards.forEach((card) => {
-      if (card.success && card.buffer) {
-        archive.append(card.buffer, { name: `${card.filename}.png` });
-      }
+    validCards.forEach((card) => {
+      archive.append(card.buffer, { name: `${card.filename}.png` });
     });
 
     await archive.finalize();
@@ -155,8 +178,9 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     });
   } catch (err: any) {
     console.error('Error in export-all ZIP generator:', err);
-    return NextResponse.json({ error: err?.message || 'Server error creating ZIP.' }, { status: 500 });
+    return NextResponse.json({ error: err?.message || 'Server error creating export.' }, { status: 500 });
   }
 }
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60; // Allow enough time for bulk generations
+export const maxDuration = 60;
+

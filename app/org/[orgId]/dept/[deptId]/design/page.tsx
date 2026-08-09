@@ -29,7 +29,7 @@ interface Department {
   id: string;
   name: string;
   code: string;
-  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>;
+  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' }>;
 }
 
 interface Organization {
@@ -234,6 +234,42 @@ function generateSvgBackground(layoutNum: number, orientation: 'horizontal' | 'v
   return `data:image/svg+xml;utf8,${encodeURIComponent(svgString.trim())}`;
 }
 
+function DraggableBox({
+  position,
+  onStop,
+  onClick,
+  className,
+  style,
+  children,
+}: {
+  position: { x: number; y: number };
+  onStop: (e: any, data: any) => void;
+  onClick: (e: React.MouseEvent) => void;
+  className?: string;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+}) {
+  const nodeRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <Draggable
+      nodeRef={nodeRef}
+      bounds="parent"
+      position={position}
+      onStop={onStop}
+    >
+      <div
+        ref={nodeRef}
+        onClick={onClick}
+        className={className}
+        style={style}
+      >
+        {children}
+      </div>
+    </Draggable>
+  );
+}
+
 export default function CardDesignerPage({ params }: PageProps) {
   const resolvedParams = use(params);
   const orgId = resolvedParams.orgId;
@@ -318,18 +354,16 @@ export default function CardDesignerPage({ params }: PageProps) {
 
           if (deptData?.fields_schema) {
             deptData.fields_schema.forEach((f: any, idx: number) => {
-              if (f.type !== 'image') {
-                initialFields.push({
-                  field: f.name,
-                  type: 'text',
-                  x: 10,
-                  y: 55 + idx * 8,
-                  fontSize: f.name.toLowerCase().includes('name') ? 16 : 12,
-                  color: f.name.toLowerCase().includes('name') ? '#1e293b' : '#475569',
-                  align: 'left',
-                  bold: f.name.toLowerCase().includes('name') ? true : false
-                });
-              }
+              initialFields.push({
+                field: f.name,
+                type: 'text',
+                x: 10,
+                y: 55 + idx * 8,
+                fontSize: f.name.toLowerCase().includes('name') ? 16 : 12,
+                color: f.name.toLowerCase().includes('name') ? '#1e293b' : '#475569',
+                align: 'left',
+                bold: f.name.toLowerCase().includes('name') ? true : false
+              });
             });
           }
           setFieldsConfig(initialFields);
@@ -1155,40 +1189,36 @@ export default function CardDesignerPage({ params }: PageProps) {
                 const actualPhotoUrl = firstRecord?.photo_url || null;
 
                 return (
-                  <Draggable
+                  <DraggableBox
                     key={index}
-                    bounds="parent"
                     position={{ x: xPx, y: yPx }}
                     onStop={(e, data) => handleDragStop(index, e, data)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedFieldIndex(index);
+                    }}
+                    className={`absolute cursor-move flex flex-col items-center justify-center border-2 bg-indigo-50/40 select-none overflow-hidden rounded-lg ${
+                      isSelected ? 'border-red-500 ring-2 ring-red-100' : 'border-indigo-300 border-dashed hover:border-indigo-400'
+                    }`}
+                    style={{ 
+                      width: `${widthPx}px`, 
+                      height: `${heightPx}px`,
+                      boxSizing: 'border-box'
+                    }}
                   >
-                    <div 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedFieldIndex(index);
-                      }}
-                      className={`absolute cursor-move flex flex-col items-center justify-center border-2 bg-indigo-50/40 select-none overflow-hidden rounded-lg ${
-                        isSelected ? 'border-red-500 ring-2 ring-red-100' : 'border-indigo-300 border-dashed hover:border-indigo-400'
-                      }`}
-                      style={{ 
-                        width: `${widthPx}px`, 
-                        height: `${heightPx}px`,
-                        boxSizing: 'border-box'
-                      }}
-                    >
-                      {actualPhotoUrl ? (
-                        <img 
-                          src={actualPhotoUrl} 
-                          alt="First Record Portrait" 
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <>
-                          <ImageIcon className="h-6 w-6 text-indigo-500" />
-                          <span className="text-[9px] text-indigo-600 font-bold mt-1 uppercase tracking-wider">{field.field}</span>
-                        </>
-                      )}
-                    </div>
-                  </Draggable>
+                    {actualPhotoUrl ? (
+                      <img 
+                        src={actualPhotoUrl} 
+                        alt="First Record Portrait" 
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <>
+                        <ImageIcon className="h-6 w-6 text-indigo-500" />
+                        <span className="text-[9px] text-indigo-600 font-bold mt-1 uppercase tracking-wider">{field.field}</span>
+                      </>
+                    )}
+                  </DraggableBox>
                 );
               }
 
@@ -1197,34 +1227,30 @@ export default function CardDesignerPage({ params }: PageProps) {
               const mockText = getPreviewText(field.field);
 
               return (
-                <Draggable
+                <DraggableBox
                   key={index}
-                  bounds="parent"
                   position={{ x: xPx, y: yPx }}
                   onStop={(e, data) => handleDragStop(index, e, data)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFieldIndex(index);
+                  }}
+                  className={`absolute cursor-move px-2 py-0.5 rounded select-none whitespace-nowrap flex items-center ${
+                    isSelected 
+                      ? 'border border-red-500 bg-red-50/50 text-red-900 font-bold' 
+                      : 'hover:border hover:border-indigo-300 hover:bg-indigo-50/30'
+                  }`}
+                  style={{
+                    fontSize: `${field.fontSize}px`,
+                    color: field.color,
+                    fontWeight: field.bold ? 'bold' : 'normal',
+                    fontStyle: field.italic ? 'italic' : 'normal',
+                    textAlign: field.align,
+                    boxSizing: 'border-box'
+                  }}
                 >
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedFieldIndex(index);
-                    }}
-                    className={`absolute cursor-move px-2 py-0.5 rounded select-none whitespace-nowrap flex items-center ${
-                      isSelected 
-                        ? 'border border-red-500 bg-red-50/50 text-red-900 font-bold' 
-                        : 'hover:border hover:border-indigo-300 hover:bg-indigo-50/30'
-                    }`}
-                    style={{
-                      fontSize: `${field.fontSize}px`,
-                      color: field.color,
-                      fontWeight: field.bold ? 'bold' : 'normal',
-                      fontStyle: field.italic ? 'italic' : 'normal',
-                      textAlign: field.align,
-                      boxSizing: 'border-box'
-                    }}
-                  >
-                    {mockText}
-                  </div>
-                </Draggable>
+                  {mockText}
+                </DraggableBox>
               );
             })}
           </div>

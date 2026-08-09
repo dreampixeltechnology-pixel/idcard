@@ -29,7 +29,9 @@ import {
   UserCheck,
   Link2,
   FileArchive,
-  Camera
+  Camera,
+  FileText,
+  CalendarDays
 } from 'lucide-react';
 
 interface Department {
@@ -37,7 +39,7 @@ interface Department {
   name: string;
   code: string;
   expected_count: number;
-  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>;
+  fields_schema: Array<{ name: string; type: 'text' | 'number' | 'date' }>;
 }
 
 interface Organization {
@@ -85,6 +87,7 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraActiveFieldName, setCameraActiveFieldName] = useState<string>('');
   const [cameraActiveRecordId, setCameraActiveRecordId] = useState<string | null>(null);
+  const [photoModalRecord, setPhotoModalRecord] = useState<RecordRow | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Excel Bulk Modals
@@ -104,7 +107,7 @@ export default function DeptDetailPage({ params }: PageProps) {
   const [formulaCopied, setFormulaCopied] = useState(false);
   const [editDeptName, setEditDeptName] = useState('');
   const [editExpectedCount, setEditExpectedCount] = useState<number>(0);
-  const [editFields, setEditFields] = useState<Array<{ name: string; type: 'text' | 'number' | 'date' | 'image' }>>([]);
+  const [editFields, setEditFields] = useState<Array<{ name: string; type: 'text' | 'number' | 'date' }>>([]);
   const [updatingDept, setUpdatingDept] = useState(false);
   const [deletingDept, setDeletingDept] = useState(false);
   const [editDeptError, setEditDeptError] = useState<string | null>(null);
@@ -433,11 +436,10 @@ export default function DeptDetailPage({ params }: PageProps) {
       for (const field of fieldsSchema) {
         const val = singleFormData[field.name];
 
-        // Required check for non-image fields
-        if (field.type !== 'image') {
-          if (val === undefined || val === null || (typeof val === 'string' && val.trim() === '')) {
-            throw new Error(`"${field.name}" is a required field and cannot be empty.`);
-          }
+        // Required check for text/number/date fields (excluding image/photo fields)
+        const isImageField = (field.type as string) === 'image' || ['photo', 'image', 'photo_url', 'avatar', 'portrait'].includes(field.name.toLowerCase());
+        if (!isImageField && (val === undefined || val === null || (typeof val === 'string' && val.trim() === ''))) {
+          throw new Error(`"${field.name}" is a required field and cannot be empty.`);
         }
 
         // Phone format regex validation
@@ -454,14 +456,18 @@ export default function DeptDetailPage({ params }: PageProps) {
         }
 
         // Date validity check
-        if (field.type === 'date' && val) {
-          const dateObj = new Date(val);
-          if (isNaN(dateObj.getTime())) {
-            throw new Error(`"${field.name}" must be a valid calendar date.`);
-          }
-          const year = dateObj.getFullYear();
-          if (year < 1900 || year > 2100) {
-            throw new Error(`"${field.name}" must have a valid year between 1900 and 2100.`);
+        if ((field.type === 'date' || field.name.toLowerCase().includes('dob') || field.name.toLowerCase().includes('date')) && val) {
+          const formatted = formatToDDMMYYYY(val);
+          const parts = formatted.split('-');
+          if (parts.length === 3) {
+            const dd = parseInt(parts[0], 10);
+            const mm = parseInt(parts[1], 10);
+            const yyyy = parseInt(parts[2], 10);
+            if (isNaN(dd) || isNaN(mm) || isNaN(yyyy) || dd < 1 || dd > 31 || mm < 1 || mm > 12 || yyyy < 1900 || yyyy > 2100) {
+              throw new Error(`"${field.name}" must be a valid date in DD-MM-YYYY format (e.g. 15-08-1995).`);
+            }
+          } else {
+            throw new Error(`"${field.name}" must be a valid date in DD-MM-YYYY format (e.g. 15-08-1995).`);
           }
         }
       }
@@ -481,7 +487,7 @@ export default function DeptDetailPage({ params }: PageProps) {
         if (field.type === 'date' && val) {
           val = formatToDDMMYYYY(val);
         }
-        if (field.type === 'image' && field.name.toLowerCase() === 'photo' && val) {
+        if (field.name.toLowerCase() === 'photo' && typeof val === 'string' && val.startsWith('data:image/')) {
           // Convert Base64 back to file blob
           const res = await fetch(val);
           const blob = await res.blob();
@@ -530,8 +536,8 @@ export default function DeptDetailPage({ params }: PageProps) {
     const initialForm: Record<string, any> = {};
     fieldsSchema.forEach(f => {
       let val = record.data[f.name] || '';
-      if (f.type === 'date' && val) {
-        val = convertDDMMYYYYToYYYYMMDD(val);
+      if ((f.type === 'date' || f.name.toLowerCase().includes('dob') || f.name.toLowerCase().includes('date')) && val) {
+        val = formatToDDMMYYYY(val);
       }
       initialForm[f.name] = val;
     });
@@ -602,13 +608,27 @@ export default function DeptDetailPage({ params }: PageProps) {
     const XLSX = await import('xlsx');
     const headers = fieldsSchema.map(f => f.name);
     
-    // Add "photo" as standard guide column name if dynamic image exists
-    const hasPhotoField = fieldsSchema.some(f => f.name.toLowerCase() === 'photo' || f.type === 'image');
+    // Add "photo" as standard guide column name
+    const hasPhotoField = fieldsSchema.some(f => f.name.toLowerCase() === 'photo');
     if (!hasPhotoField) {
       headers.push('Photo');
     }
 
-    const ws = XLSX.utils.aoa_to_sheet([headers]);
+    const sampleRow: Record<string, any> = {};
+    fieldsSchema.forEach(f => {
+      if (f.type === 'date' || f.name.toLowerCase().includes('dob') || f.name.toLowerCase().includes('date')) {
+        sampleRow[f.name] = '15-08-1995';
+      } else if (f.type === 'number') {
+        sampleRow[f.name] = '9876543210';
+      } else {
+        sampleRow[f.name] = f.name.toLowerCase().includes('name') ? 'राम शर्मा' : 'नमूना टेक्स्ट';
+      }
+    });
+    if (!hasPhotoField) {
+      sampleRow['Photo'] = 'photo_filename.jpg (Optional)';
+    }
+
+    const ws = XLSX.utils.json_to_sheet([sampleRow], { header: headers });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Records Template');
     XLSX.writeFile(wb, `${organization?.code}-${dept.code}-template.xlsx`);
@@ -744,7 +764,7 @@ export default function DeptDetailPage({ params }: PageProps) {
     let fontName = 'Helvetica';
     try {
       // Fetch Noto Sans Devanagari regular font for Hindi Unicode rendering support
-      const response = await fetch('https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf');
+      const response = await fetch('https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-devanagari@latest/devanagari-400-normal.ttf');
       if (response.ok) {
         const arrayBuffer = await response.arrayBuffer();
         
@@ -753,8 +773,8 @@ export default function DeptDetailPage({ params }: PageProps) {
           const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
           const reader = new FileReader();
           reader.onload = (e) => {
-            const dataUrl = e.target?.result as string;
-            const base64 = dataUrl.split(',')[1];
+            const dataUrl = (e.target?.result as string) || '';
+            const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
             resolve(base64);
           };
           reader.readAsDataURL(blob);
@@ -1043,7 +1063,7 @@ export default function DeptDetailPage({ params }: PageProps) {
             <div className="flex items-center space-x-2">
               <Link
                 href={`/org/${orgId}/dept/${deptId}/design`}
-                className="flex items-center space-x-1 bg-white hover:bg-slate-50 text-indigo-600 border border-slate-200 rounded-xl px-4 py-2 text-sm font-semibold shadow-sm transition-colors"
+                className="flex items-center space-x-1 bg-white hover:bg-slate-50 text-indigo-600 border border-slate-200 rounded-xl px-3.5 py-2 text-xs md:text-sm font-semibold shadow-sm transition-colors"
                 id="design-cards-btn"
               >
                 <Palette className="h-4 w-4" />
@@ -1051,12 +1071,23 @@ export default function DeptDetailPage({ params }: PageProps) {
               </Link>
 
               <a
+                href={`/api/cards/export-all/${deptId}?format=pdf`}
+                className="flex items-center space-x-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl px-3.5 py-2 text-xs md:text-sm font-semibold transition-colors"
+                id="export-pdf-sheet-btn"
+                title="Download A4 Print Sheet PDF of all ID cards"
+              >
+                <FileText className="h-4 w-4 text-rose-600" />
+                <span>Export PDF Sheet</span>
+              </a>
+
+              <a
                 href={`/api/cards/export-all/${deptId}`}
-                className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2 text-sm font-semibold shadow-md shadow-indigo-100 transition-colors"
+                className="flex items-center space-x-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-3.5 py-2 text-xs md:text-sm font-semibold shadow-md shadow-indigo-100 transition-colors"
                 id="export-all-btn"
+                title="Download ZIP package with High-Res PNGs, A4 PDF Sheet & Excel data"
               >
                 <Download className="h-4 w-4" />
-                <span>Export All (ZIP)</span>
+                <span>Export ZIP (All)</span>
               </a>
             </div>
           </div>
@@ -1360,32 +1391,11 @@ export default function DeptDetailPage({ params }: PageProps) {
                           {/* Actions */}
                           <td className="px-6 py-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
-                              {/* Direct photo upload tool if missing or changing */}
-                              <div className="relative">
-                                <input 
-                                  type="file" 
-                                  accept="image/*"
-                                  className="hidden" 
-                                  id={`row-file-${record.id}`}
-                                  onChange={(e) => handlePhotoSelect(e, 'Photo', record.id)}
-                                />
-                                <label 
-                                  htmlFor={`row-file-${record.id}`}
-                                  className="cursor-pointer p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                                  title="Upload Photo"
-                                >
-                                  <ImageIcon className="h-4 w-4" />
-                                </label>
-                              </div>
-
+                              {/* Unified Photo / Image Action Button (Upload & Camera) */}
                               <button
-                                onClick={() => {
-                                  setCameraActiveFieldName('Photo');
-                                  setCameraActiveRecordId(record.id);
-                                  setIsCameraOpen(true);
-                                }}
+                                onClick={() => setPhotoModalRecord(record)}
                                 className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                                title="Capture with Camera"
+                                title="Add or Update Photo (Upload / Camera)"
                               >
                                 <Camera className="h-4 w-4" />
                               </button>
@@ -1399,14 +1409,24 @@ export default function DeptDetailPage({ params }: PageProps) {
                               </button>
 
                               {record.photo_uploaded && (
-                                <a
-                                  href={`/api/cards/single/${record.id}`}
-                                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
-                                  title="Export Card PNG"
-                                  id={`export-single-btn-${record.id}`}
-                                >
-                                  <FileSpreadsheet className="h-4 w-4" />
-                                </a>
+                                <>
+                                  <a
+                                    href={`/api/cards/single/${record.id}?format=png`}
+                                    className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
+                                    title="Export High-Res PNG Card"
+                                    id={`export-single-png-${record.id}`}
+                                  >
+                                    <Download className="h-4 w-4" />
+                                  </a>
+                                  <a
+                                    href={`/api/cards/single/${record.id}?format=pdf`}
+                                    className="p-1.5 text-rose-600 hover:bg-rose-50 border border-rose-100 rounded-lg flex items-center justify-center transition-colors"
+                                    title="Export CR80 PDF Card"
+                                    id={`export-single-pdf-${record.id}`}
+                                  >
+                                    <FileText className="h-4 w-4" />
+                                  </a>
+                                </>
                               )}
 
                               <button
@@ -1511,32 +1531,11 @@ export default function DeptDetailPage({ params }: PageProps) {
                         {/* Actions */}
                         <td className="px-6 py-4 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            {/* Direct photo upload tool if missing or changing */}
-                            <div className="relative">
-                              <input 
-                                type="file" 
-                                accept="image/*"
-                                className="hidden" 
-                                id={`row-file-${record.id}`}
-                                onChange={(e) => handlePhotoSelect(e, 'Photo', record.id)}
-                              />
-                              <label 
-                                htmlFor={`row-file-${record.id}`}
-                                className="cursor-pointer p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                                title="Upload Photo"
-                              >
-                                <ImageIcon className="h-4 w-4" />
-                              </label>
-                            </div>
-
+                            {/* Unified Photo / Image Action Button (Upload & Camera) */}
                             <button
-                              onClick={() => {
-                                setCameraActiveFieldName('Photo');
-                                setCameraActiveRecordId(record.id);
-                                setIsCameraOpen(true);
-                              }}
+                              onClick={() => setPhotoModalRecord(record)}
                               className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg flex items-center justify-center transition-colors"
-                              title="Capture with Camera"
+                              title="Add or Update Photo (Upload / Camera)"
                             >
                               <Camera className="h-4 w-4" />
                             </button>
@@ -1550,14 +1549,24 @@ export default function DeptDetailPage({ params }: PageProps) {
                             </button>
 
                             {record.photo_uploaded && (
-                              <a
-                                href={`/api/cards/single/${record.id}`}
-                                className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
-                                title="Export Card PNG"
-                                id={`export-single-btn-${record.id}`}
-                              >
-                                <FileSpreadsheet className="h-4 w-4" />
-                              </a>
+                              <>
+                                <a
+                                  href={`/api/cards/single/${record.id}?format=png`}
+                                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 border border-indigo-100 rounded-lg flex items-center justify-center transition-colors"
+                                  title="Export High-Res PNG Card"
+                                  id={`export-single-png-grid-${record.id}`}
+                                >
+                                  <Download className="h-4 w-4" />
+                                </a>
+                                <a
+                                  href={`/api/cards/single/${record.id}?format=pdf`}
+                                  className="p-1.5 text-rose-600 hover:bg-rose-50 border border-rose-100 rounded-lg flex items-center justify-center transition-colors"
+                                  title="Export CR80 PDF Card"
+                                  id={`export-single-pdf-grid-${record.id}`}
+                                >
+                                  <FileText className="h-4 w-4" />
+                                </a>
+                              </>
                             )}
 
                             <button
@@ -1621,7 +1630,9 @@ export default function DeptDetailPage({ params }: PageProps) {
                 </p>
               </div>
 
-              {fieldsSchema.map((field) => (
+              {fieldsSchema
+                .filter(f => !['photo', 'image', 'photo_url', 'avatar', 'portrait'].includes(f.name.toLowerCase()))
+                .map((field) => (
                 <div key={field.name}>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                     {field.name}
@@ -1648,118 +1659,108 @@ export default function DeptDetailPage({ params }: PageProps) {
                   )}
 
                   {field.type === 'date' && (
-                    <input
-                      type="date"
-                      value={singleFormData[field.name] || ''}
-                      onChange={(e) => setSingleFormData({ ...singleFormData, [field.name]: e.target.value })}
-                      className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
-                    />
-                  )}
-
-                  {field.type === 'image' && (
-                    <div className="space-y-2">
-                      <div className="flex gap-2.5 items-center">
-                        <input 
-                          type="file" 
-                          accept="image/*"
-                          ref={fileInputRef}
-                          className="hidden"
-                          onChange={(e) => handlePhotoSelect(e, field.name)}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors"
-                        >
-                          <ImageIcon className="h-4 w-4" /> Pick Image
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCameraActiveFieldName(field.name);
-                            setCameraActiveRecordId(null);
-                            setIsCameraOpen(true);
-                          }}
-                          className="flex items-center gap-1.5 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-150 rounded-xl text-xs font-semibold transition-colors"
-                        >
-                          <Camera className="h-4 w-4" /> Camera
-                        </button>
-                        
-                        {singleFormData[field.name] && (
-                          <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Ready
-                          </span>
-                        )}
-                      </div>
-
-                      {singleFormData[field.name] && (
-                        <div className="relative h-40 w-40 rounded-xl border border-slate-200 overflow-hidden">
-                          <img 
-                            src={singleFormData[field.name]} 
-                            alt="Crop Preview" 
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                      )}
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        placeholder="DD-MM-YYYY (e.g. 15-08-1995)"
+                        value={singleFormData[field.name] || ''}
+                        onChange={(e) => setSingleFormData({ ...singleFormData, [field.name]: e.target.value })}
+                        onBlur={(e) => {
+                          if (e.target.value) {
+                            setSingleFormData({ ...singleFormData, [field.name]: formatToDDMMYYYY(e.target.value) });
+                          }
+                        }}
+                        className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 pr-10 text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 sm:text-sm outline-none transition-all"
+                      />
+                      <input
+                        type="date"
+                        tabIndex={-1}
+                        className="absolute right-2 opacity-0 w-8 h-8 cursor-pointer"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setSingleFormData({ ...singleFormData, [field.name]: formatToDDMMYYYY(e.target.value) });
+                          }
+                        }}
+                      />
+                      <CalendarDays className="absolute right-3 h-4 w-4 text-slate-400 pointer-events-none" />
                     </div>
                   )}
+
                 </div>
               ))}
 
-              {/* Standard Photo option if schema has no images but we want to upload */}
-              {!fieldsSchema.some(f => f.type === 'image') && (
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                    Card Photo / Portrait
+              {/* Unified Card Photo / Portrait Section */}
+              <div className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    <Camera className="h-4 w-4 text-indigo-600" />
+                    <span>Photo / Image (फोटो / तस्वीर)</span>
                   </label>
-                  <div className="space-y-2">
-                    <div className="flex gap-2.5 items-center">
-                      <input 
-                        type="file" 
-                        accept="image/*"
-                        className="hidden"
-                        id="standard-photo-picker"
-                        onChange={(e) => handlePhotoSelect(e, 'Photo')}
-                      />
-                      <label
-                        htmlFor="standard-photo-picker"
-                        className="cursor-pointer flex items-center gap-1.5 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition-colors"
-                      >
-                        <ImageIcon className="h-4 w-4" /> Choose Photo
-                      </label>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCameraActiveFieldName('Photo');
-                          setCameraActiveRecordId(null);
-                          setIsCameraOpen(true);
-                        }}
-                        className="flex items-center gap-1.5 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-150 rounded-xl text-xs font-semibold transition-colors"
-                      >
-                        <Camera className="h-4 w-4" /> Camera
-                      </button>
-                      
-                      {singleFormData['Photo'] && (
-                        <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Attached
-                        </span>
-                      )}
-                    </div>
-
-                    {singleFormData['Photo'] && (
-                      <div className="relative h-40 w-40 rounded-xl border border-slate-200 overflow-hidden">
-                        <img 
-                          src={singleFormData['Photo']} 
-                          alt="Crop Preview" 
-                          className="h-full w-full object-cover"
-                        />
-                      </div>
-                    )}
-                  </div>
+                  {singleFormData['Photo'] && (
+                    <span className="text-[11px] text-emerald-600 font-bold flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Photo Attached
+                    </span>
+                  )}
                 </div>
-              )}
+
+                <p className="text-xs text-slate-500">
+                  Upload an image file from your device or capture a live photo using your camera.
+                </p>
+
+                <div className="flex flex-wrap gap-2.5 items-center">
+                  <input 
+                    type="file" 
+                    accept="image/*"
+                    className="hidden"
+                    id="standard-photo-picker"
+                    onChange={(e) => handlePhotoSelect(e, 'Photo')}
+                  />
+                  <label
+                    htmlFor="standard-photo-picker"
+                    className="cursor-pointer flex items-center gap-2 px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all shadow-sm"
+                  >
+                    <ImageIcon className="h-4 w-4 text-indigo-600" />
+                    <span>Upload Image File</span>
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCameraActiveFieldName('Photo');
+                      setCameraActiveRecordId(null);
+                      setIsCameraOpen(true);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-100"
+                  >
+                    <Camera className="h-4 w-4" />
+                    <span>Capture with Camera</span>
+                  </button>
+
+                  {singleFormData['Photo'] && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = { ...singleFormData };
+                        delete updated['Photo'];
+                        setSingleFormData(updated);
+                      }}
+                      className="text-xs text-rose-600 hover:text-rose-700 font-semibold px-2.5 py-1 rounded-lg hover:bg-rose-50 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                {singleFormData['Photo'] && (
+                  <div className="relative h-36 w-36 rounded-xl border-2 border-indigo-100 shadow-md overflow-hidden bg-white mt-2">
+                    <img 
+                      src={singleFormData['Photo']} 
+                      alt="Card Photo Preview" 
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                )}
+              </div>
 
               {/* Footer Buttons */}
               <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-100">
@@ -1839,13 +1840,32 @@ export default function DeptDetailPage({ params }: PageProps) {
                     Enter New Value
                   </label>
                   {fieldsSchema.find(f => f.name === bulkEditField)?.type === 'date' ? (
-                    <input
-                      type="date"
-                      required
-                      value={bulkEditValue}
-                      onChange={(e) => setBulkEditValue(e.target.value)}
-                      className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 text-slate-900 sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        required
+                        placeholder="DD-MM-YYYY (e.g. 15-08-1995)"
+                        value={bulkEditValue}
+                        onChange={(e) => setBulkEditValue(e.target.value)}
+                        onBlur={(e) => {
+                          if (e.target.value) {
+                            setBulkEditValue(formatToDDMMYYYY(e.target.value));
+                          }
+                        }}
+                        className="block w-full rounded-xl border border-slate-200 px-3 py-2.5 pr-10 text-slate-900 placeholder:text-slate-400 sm:text-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                      <input
+                        type="date"
+                        tabIndex={-1}
+                        className="absolute right-2 opacity-0 w-8 h-8 cursor-pointer"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            setBulkEditValue(formatToDDMMYYYY(e.target.value));
+                          }
+                        }}
+                      />
+                      <CalendarDays className="absolute right-3 h-4 w-4 text-slate-400 pointer-events-none" />
+                    </div>
                   ) : fieldsSchema.find(f => f.name === bulkEditField)?.type === 'number' ? (
                     <input
                       type="number"
@@ -1911,6 +1931,91 @@ export default function DeptDetailPage({ params }: PageProps) {
         />
       )}
 
+      {/* Unified Record Photo Options Modal (Upload File & Camera Capture) */}
+      {photoModalRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm bg-white rounded-2xl border border-slate-100 shadow-2xl p-6 relative animate-scale-up space-y-4">
+            <button 
+              onClick={() => setPhotoModalRecord(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:bg-slate-50 hover:text-slate-600 p-1.5 rounded-lg transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="flex items-center gap-2 text-indigo-600 font-bold font-display text-lg">
+              <Camera className="h-5 w-5" />
+              <span>Photo / Image (फोटो / तस्वीर)</span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-xs text-slate-600 space-y-1">
+              <p className="font-bold text-slate-800">
+                Slot #{photoModalRecord.serial_number}: {photoModalRecord.data['Name'] || photoModalRecord.data['Full Name'] || photoModalRecord.data['NAME'] || 'Record'}
+              </p>
+              <p className="text-[11px] text-slate-400">Choose how you would like to add or update the photo:</p>
+            </div>
+
+            {photoModalRecord.photo_uploaded && photoModalRecord.photo_url && (
+              <div className="flex flex-col items-center justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+                <img 
+                  src={photoModalRecord.photo_url} 
+                  alt="Current Avatar" 
+                  className="h-28 w-28 object-cover rounded-lg shadow-sm border border-slate-200"
+                />
+                <span className="text-[10px] text-emerald-600 font-bold mt-1.5 flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> Photo currently attached
+                </span>
+              </div>
+            )}
+
+            <div className="space-y-2.5 pt-1">
+              <input 
+                type="file" 
+                accept="image/*"
+                className="hidden" 
+                id={`modal-photo-upload-${photoModalRecord.id}`}
+                onChange={(e) => {
+                  const targetId = photoModalRecord.id;
+                  setPhotoModalRecord(null);
+                  handlePhotoSelect(e, 'Photo', targetId);
+                }}
+              />
+              <label
+                htmlFor={`modal-photo-upload-${photoModalRecord.id}`}
+                className="cursor-pointer w-full flex items-center justify-center gap-2 px-4 py-3 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all shadow-sm"
+              >
+                <ImageIcon className="h-4 w-4 text-indigo-600" />
+                <span>Upload Image File (गैलरी से चुनें)</span>
+              </label>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId = photoModalRecord.id;
+                  setPhotoModalRecord(null);
+                  setCameraActiveFieldName('Photo');
+                  setCameraActiveRecordId(targetId);
+                  setIsCameraOpen(true);
+                }}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-100"
+              >
+                <Camera className="h-4 w-4" />
+                <span>Capture with Camera (कैमरा से फोटो लें)</span>
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPhotoModalRecord(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Excel Bulk Upload Modal */}
       {isExcelModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in" id="bulk-upload-modal">
@@ -1947,19 +2052,13 @@ export default function DeptDetailPage({ params }: PageProps) {
                       {bulkUploadedRecords.map((rec) => (
                         <div key={rec.id} className="flex items-center justify-between bg-white border border-slate-100 p-2 rounded-lg text-xs">
                           <span className="font-semibold text-slate-700 font-mono">Row #{rec.serial_number}</span>
-                          <input 
-                            type="file" 
-                            accept="image/*"
-                            id={`row-photo-picker-${rec.id}`}
-                            className="hidden"
-                            onChange={(e) => handlePhotoSelect(e, 'Photo', rec.id)}
-                          />
-                          <label
-                            htmlFor={`row-photo-picker-${rec.id}`}
-                            className="cursor-pointer bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 font-bold px-2.5 py-1 rounded-md text-[10px] transition-all flex items-center gap-1"
+                          <button
+                            type="button"
+                            onClick={() => setPhotoModalRecord(rec)}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-150 font-bold px-2.5 py-1 rounded-md text-[10px] transition-all flex items-center gap-1 cursor-pointer"
                           >
-                            <ImageIcon className="h-3 w-3" /> Photo
-                          </label>
+                            <Camera className="h-3 w-3 text-indigo-600" /> Photo
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -2179,7 +2278,6 @@ export default function DeptDetailPage({ params }: PageProps) {
                            <option value="text">Text</option>
                            <option value="number">Number</option>
                            <option value="date">Date</option>
-                           <option value="image">Image</option>
                         </select>
                       </div>
                       <button

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-admin';
-import { generateCardPng } from '@/lib/card-renderer';
+import { generateCardPng, generateCardPdf } from '@/lib/card-renderer';
 
 interface RouteParams {
   params: Promise<{ recordId: string }>;
@@ -10,6 +10,8 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
   try {
     const resolvedParams = await params;
     const recordId = resolvedParams.recordId;
+    const searchParams = req.nextUrl.searchParams;
+    const format = searchParams.get('format') === 'pdf' ? 'pdf' : 'png';
 
     if (!recordId) {
       return NextResponse.json({ error: 'Record ID is required.' }, { status: 400 });
@@ -63,13 +65,27 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     const deptCode = dept.code.toUpperCase();
     const serial = record.serial_number;
 
-    // 3. Generate PNG
+    // 3. Generate PNG first
     const pngBuffer = await generateCardPng(
       design.orientation as 'horizontal' | 'vertical',
       design.background_url,
       design.fields_config,
       record
     );
+
+    if (format === 'pdf') {
+      const pdfBuffer = await generateCardPdf(
+        design.orientation as 'horizontal' | 'vertical',
+        pngBuffer
+      );
+      return new NextResponse(new Uint8Array(pdfBuffer), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${orgCode}-${deptCode}-${serial}.pdf"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    }
 
     // 4. Return PNG stream
     return new NextResponse(new Uint8Array(pngBuffer), {
@@ -80,8 +96,9 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
       },
     });
   } catch (err: any) {
-    console.error('Error generating single card PNG:', err);
-    return NextResponse.json({ error: err?.message || 'Server error rendering PNG.' }, { status: 500 });
+    console.error('Error generating single card export:', err);
+    return NextResponse.json({ error: err?.message || 'Server error rendering card.' }, { status: 500 });
   }
 }
 export const dynamic = 'force-dynamic';
+
